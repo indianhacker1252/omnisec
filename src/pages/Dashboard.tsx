@@ -2,6 +2,7 @@ import { CommandHeader } from "@/components/CommandHeader";
 import { ModuleCard } from "@/components/ModuleCard";
 import { SystemStatus } from "@/components/SystemStatus";
 import { AIAssistant } from "@/components/AIAssistant";
+import { useNavigate } from "react-router-dom";
 import {
   Search,
   Globe,
@@ -16,66 +17,78 @@ import {
 } from "lucide-react";
 
 const Dashboard = () => {
+  const navigate = useNavigate();
+
   const modules = [
     {
       title: "Reconnaissance",
       description: "Network mapping, asset discovery, and OSINT gathering",
       icon: Search,
       status: "active" as const,
+      path: "/recon",
     },
     {
       title: "Web & App Analysis",
       description: "Burp Suite, ZAP integration for vulnerability scanning",
       icon: Globe,
       status: "idle" as const,
+      path: "/",
     },
     {
       title: "Vulnerability Intel",
       description: "CVE correlation and exploit database integration",
       icon: Bug,
       status: "active" as const,
+      path: "/vuln",
     },
     {
       title: "Red Team Ops",
       description: "Metasploit, Empire sandbox for exploitation simulation",
       icon: Sword,
       status: "alert" as const,
+      path: "/",
     },
     {
       title: "Blue Team Defense",
       description: "SIEM, MITRE ATT&CK mapping, and alert correlation",
       icon: ShieldCheck,
       status: "active" as const,
+      path: "/",
     },
     {
       title: "Wireless Security",
       description: "WiFi, Bluetooth, NFC, and radio frequency analysis",
       icon: Wifi,
       status: "idle" as const,
+      path: "/",
     },
     {
       title: "Forensics & IR",
       description: "Memory analysis, disk imaging, and incident response",
       icon: FileSearch,
       status: "idle" as const,
+      path: "/",
     },
     {
       title: "Reverse Engineering",
       description: "Ghidra, radare2 integration for malware analysis",
       icon: Code,
       status: "idle" as const,
+      path: "/",
     },
     {
       title: "AI Threat Engine",
       description: "ML-driven anomaly detection and predictive analysis",
       icon: Brain,
       status: "active" as const,
+      path: "/",
     },
     {
       title: "Ethics & Governance",
       description: "Compliance auditing, audit logs, and responsible disclosure",
       icon: Scale,
       status: "active" as const,
+      path: "/",
     },
   ];
 
@@ -112,6 +125,7 @@ const Dashboard = () => {
               description={module.description}
               icon={module.icon}
               status={module.status}
+              onClick={() => navigate(module.path)}
             />
           ))}
         </div>
