@@ -3,6 +3,7 @@ import { ModuleCard } from "@/components/ModuleCard";
 import { SystemStatus } from "@/components/SystemStatus";
 import { AIAssistant } from "@/components/AIAssistant";
 import { useNavigate } from "react-router-dom";
+import { useToast } from "@/hooks/use-toast";
 import {
   Search,
   Globe,
@@ -18,6 +19,7 @@ import {
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
 
   const modules = [
     {
@@ -125,7 +127,14 @@ const Dashboard = () => {
               description={module.description}
               icon={module.icon}
               status={module.status}
-              onClick={() => navigate(module.path)}
+              onClick={() =>
+                module.path !== "/"
+                  ? navigate(module.path)
+                  : toast({
+                      title: "Module coming soon",
+                      description: "This module will be enabled shortly.",
+                    })
+              }
             />
           ))}
         </div>
