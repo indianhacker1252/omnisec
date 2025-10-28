@@ -1,8 +1,10 @@
 import { Shield, Activity, Bell, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useNavigate } from "react-router-dom";
 
 export const CommandHeader = () => {
+  const navigate = useNavigate();
   return (
     <header className="border-b border-border/50 bg-card/30 backdrop-blur-md sticky top-0 z-50">
       <div className="container mx-auto px-6 py-4">
@@ -35,7 +37,7 @@ export const CommandHeader = () => {
               </Badge>
             </Button>
 
-            <Button variant="ghost" size="icon">
+            <Button variant="ghost" size="icon" onClick={() => navigate('/settings')} aria-label="Open settings">
               <Settings className="h-5 w-5" />
             </Button>
           </div>

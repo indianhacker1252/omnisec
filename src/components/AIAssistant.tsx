@@ -4,10 +4,86 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Send, Sparkles } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
+}
+
+const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`;
+
+async function streamChat({
+  messages,
+  onDelta,
+  onDone,
+}: {
+  messages: Message[];
+  onDelta: (deltaText: string) => void;
+  onDone: () => void;
+}) {
+  const resp = await fetch(CHAT_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+    },
+    body: JSON.stringify({ messages }),
+  });
+  if (!resp.ok || !resp.body) {
+    throw new Error(`Failed to start stream (${resp.status})`);
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let textBuffer = "";
+  let streamDone = false;
+
+  while (!streamDone) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    textBuffer += decoder.decode(value, { stream: true });
+
+    let newlineIndex: number;
+    while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
+      let line = textBuffer.slice(0, newlineIndex);
+      textBuffer = textBuffer.slice(newlineIndex + 1);
+      if (line.endsWith("\r")) line = line.slice(0, -1);
+      if (line.startsWith(":") || line.trim() === "") continue;
+      if (!line.startsWith("data: ")) continue;
+      const jsonStr = line.slice(6).trim();
+      if (jsonStr === "[DONE]") {
+        streamDone = true;
+        break;
+      }
+      try {
+        const parsed = JSON.parse(jsonStr);
+        const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+        if (content) onDelta(content);
+      } catch {
+        textBuffer = line + "\n" + textBuffer;
+        break;
+      }
+    }
+  }
+
+  if (textBuffer.trim()) {
+    for (let raw of textBuffer.split("\n")) {
+      if (!raw) continue;
+      if (raw.endsWith("\r")) raw = raw.slice(0, -1);
+      if (raw.startsWith(":") || raw.trim() === "") continue;
+      if (!raw.startsWith("data: ")) continue;
+      const jsonStr = raw.slice(6).trim();
+      if (jsonStr === "[DONE]") continue;
+      try {
+        const parsed = JSON.parse(jsonStr);
+        const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+        if (content) onDelta(content);
+      } catch { /* ignore */ }
+    }
+  }
+
+  onDone();
 }
 
 export const AIAssistant = () => {
@@ -18,29 +94,38 @@ export const AIAssistant = () => {
     },
   ]);
   const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleSend = () => {
-    if (!input.trim()) return;
-
-    const newMessage: Message = { role: "user", content: input };
-    setMessages((prev) => [...prev, newMessage]);
+  const handleSend = async () => {
+    if (!input.trim() || loading) return;
+    const userMsg: Message = { role: "user", content: input };
+    setMessages((prev) => [...prev, userMsg]);
     setInput("");
+    setLoading(true);
 
-    // Simulate AI response
-    setTimeout(() => {
-      const responses = [
-        "Analyzing your request... Standing by for execution.",
-        "Scanning target network. 245 hosts discovered.",
-        "Vulnerability assessment initiated. Running Nuclei templates.",
-        "Red team simulation configured. Lab mode active.",
-        "Threat intelligence correlation complete. 12 CVEs matched.",
-      ];
-      const response: Message = {
-        role: "assistant",
-        content: responses[Math.floor(Math.random() * responses.length)],
-      };
-      setMessages((prev) => [...prev, response]);
-    }, 1000);
+    let assistantSoFar = "";
+    const upsertAssistant = (next: string) => {
+      assistantSoFar += next;
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.role === "assistant") {
+          return prev.map((m, i) => (i === prev.length - 1 ? { ...m, content: assistantSoFar } : m));
+        }
+        return [...prev, { role: "assistant", content: assistantSoFar }];
+      });
+    };
+
+    try {
+      await streamChat({
+        messages: [...messages, userMsg],
+        onDelta: upsertAssistant,
+        onDone: () => setLoading(false),
+      });
+    } catch (e) {
+      console.error(e);
+      setLoading(false);
+      setMessages((prev) => [...prev, { role: "assistant", content: "Sorry, the AI is unavailable right now." }]);
+    }
   };
 
   return (
@@ -55,9 +140,7 @@ export const AIAssistant = () => {
           {messages.map((message, i) => (
             <div
               key={i}
-              className={`flex ${
-                message.role === "user" ? "justify-end" : "justify-start"
-              }`}
+              className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
             >
               <div
                 className={`max-w-[80%] p-3 rounded-lg ${
@@ -66,7 +149,7 @@ export const AIAssistant = () => {
                     : "bg-cyber-purple/10 text-foreground border border-cyber-purple/30"
                 }`}
               >
-                <p className="text-sm font-mono">{message.content}</p>
+                <p className="text-sm font-mono whitespace-pre-wrap">{message.content}</p>
               </div>
             </div>
           ))}
@@ -78,11 +161,12 @@ export const AIAssistant = () => {
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyPress={(e) => e.key === "Enter" && handleSend()}
-            placeholder="Enter command or query..."
+            onKeyDown={(e) => e.key === "Enter" && handleSend()}
+            placeholder="Ask anything (threat intel, recon steps, CVEs, etc.)"
             className="font-mono bg-background/50"
+            disabled={loading}
           />
-          <Button onClick={handleSend} size="icon" className="bg-cyber-purple hover:bg-cyber-purple/80">
+          <Button onClick={handleSend} size="icon" className="bg-cyber-purple hover:bg-cyber-purple/80" disabled={loading}>
             <Send className="h-4 w-4" />
           </Button>
         </div>

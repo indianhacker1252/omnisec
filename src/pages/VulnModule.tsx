@@ -8,6 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Bug, Activity, AlertTriangle, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 interface Vulnerability {
   id: string;
@@ -42,45 +43,29 @@ const VulnModule = () => {
       description: `Analyzing ${target} for known vulnerabilities`,
     });
 
-    // Simulate vulnerability scan
-    setTimeout(() => {
-      const mockVulns: Vulnerability[] = [
-        {
-          id: Date.now().toString(),
-          cve: "CVE-2024-1234",
-          severity: "critical",
-          title: "SQL Injection in Login Form",
-          description: "Unauthenticated SQL injection vulnerability allows remote attackers to execute arbitrary SQL commands",
-          cvss: 9.8,
-          timestamp: new Date().toLocaleString(),
-        },
-        {
-          id: (Date.now() + 1).toString(),
-          cve: "CVE-2024-5678",
-          severity: "high",
-          title: "Cross-Site Scripting (XSS)",
-          description: "Reflected XSS vulnerability in search parameter",
-          cvss: 7.2,
-          timestamp: new Date().toLocaleString(),
-        },
-        {
-          id: (Date.now() + 2).toString(),
-          cve: "CVE-2024-9012",
-          severity: "medium",
-          title: "Outdated SSL/TLS Configuration",
-          description: "Server supports deprecated TLS 1.0 protocol",
-          cvss: 5.3,
-          timestamp: new Date().toLocaleString(),
-        },
-      ];
-
-      setVulnerabilities((prev) => [...mockVulns, ...prev]);
-      setScanning(false);
-      toast({
-        title: "Scan Complete",
-        description: `Found ${mockVulns.length} vulnerabilities`,
+    try {
+      const { data, error } = await supabase.functions.invoke('vulnintel', {
+        body: { query: target },
       });
-    }, 4000);
+      if (error) throw error;
+      const payload = data as any;
+      const mapped: Vulnerability[] = (payload.vulnerabilities || []).map((v: any) => ({
+        id: v.id,
+        cve: v.cve,
+        severity: (v.severity || 'unknown') as any,
+        title: v.title,
+        description: v.description,
+        cvss: v.cvss ?? 0,
+        timestamp: new Date(v.timestamp || Date.now()).toLocaleString(),
+      }));
+      setVulnerabilities((prev) => [...mapped, ...prev]);
+      toast({ title: "Scan Complete", description: `Found ${mapped.length} vulnerabilities` });
+    } catch (e) {
+      console.error(e);
+      toast({ title: "Scan Failed", description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
+    } finally {
+      setScanning(false);
+    }
   };
 
   const getSeverityColor = (severity: string) => {

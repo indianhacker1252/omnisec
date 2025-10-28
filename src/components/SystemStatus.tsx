@@ -1,8 +1,30 @@
 import { Card } from "@/components/ui/card";
 import { StatusIndicator } from "./StatusIndicator";
 import { Shield, Cpu, HardDrive, Network } from "lucide-react";
+import { useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+
+interface BackendStatus {
+  time: string;
+  aiEnabled: boolean;
+  shodanConfigured: boolean;
+  nvdConfigured: boolean;
+}
 
 export const SystemStatus = () => {
+  const [status, setStatus] = useState<BackendStatus | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await supabase.functions.invoke('status');
+        setStatus(data as BackendStatus);
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, []);
+
   return (
     <Card className="p-6 bg-card/50 backdrop-blur-sm">
       <div className="flex items-center gap-2 mb-6">
@@ -12,33 +34,23 @@ export const SystemStatus = () => {
 
       <div className="grid grid-cols-2 gap-6">
         <StatusIndicator
-          label="CPU Load"
-          value="23%"
-          status="success"
+          label="AI Gateway"
+          value={status?.aiEnabled ? "Online" : "Offline"}
+          status={status?.aiEnabled ? "success" : "warning"}
         />
         <StatusIndicator
-          label="Memory"
-          value="4.2GB / 16GB"
-          status="normal"
+          label="Shodan"
+          value={status?.shodanConfigured ? "Configured" : "Missing Key"}
+          status={status?.shodanConfigured ? "normal" : "warning"}
         />
         <StatusIndicator
-          label="Active Scans"
-          value="3"
-          status="normal"
+          label="NVD"
+          value={status?.nvdConfigured ? "Configured" : "Optional"}
+          status={status?.nvdConfigured ? "normal" : "success"}
         />
         <StatusIndicator
-          label="Threats Detected"
-          value="12"
-          status="warning"
-        />
-        <StatusIndicator
-          label="Network I/O"
-          value="245 MB/s"
-          status="success"
-        />
-        <StatusIndicator
-          label="DB Queries"
-          value="1.2K/min"
+          label="Server Time"
+          value={status?.time ? new Date(status.time).toLocaleTimeString() : "--"}
           status="normal"
         />
       </div>
@@ -47,19 +59,19 @@ export const SystemStatus = () => {
         <div className="grid grid-cols-4 gap-4">
           <div className="text-center">
             <Cpu className="h-5 w-5 mx-auto mb-2 text-cyber-cyan" />
-            <p className="text-xs text-muted-foreground font-mono">8 Cores</p>
+            <p className="text-xs text-muted-foreground font-mono">Live backend</p>
           </div>
           <div className="text-center">
             <HardDrive className="h-5 w-5 mx-auto mb-2 text-cyber-purple" />
-            <p className="text-xs text-muted-foreground font-mono">2TB SSD</p>
+            <p className="text-xs text-muted-foreground font-mono">Secure secrets</p>
           </div>
           <div className="text-center">
             <Network className="h-5 w-5 mx-auto mb-2 text-success" />
-            <p className="text-xs text-muted-foreground font-mono">10Gbps</p>
+            <p className="text-xs text-muted-foreground font-mono">Public functions</p>
           </div>
           <div className="text-center">
             <Shield className="h-5 w-5 mx-auto mb-2 text-cyber-red" />
-            <p className="text-xs text-muted-foreground font-mono">Lab Mode</p>
+            <p className="text-xs text-muted-foreground font-mono">Safe usage</p>
           </div>
         </div>
       </div>

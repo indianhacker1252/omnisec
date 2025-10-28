@@ -1,1 +1,13 @@
 project_id = "pavwekamqfnymbwujyld"
+
+[functions.chat]
+verify_jwt = false
+
+[functions.recon]
+verify_jwt = false
+
+[functions.vulnintel]
+verify_jwt = false
+
+[functions.status]
+verify_jwt = false

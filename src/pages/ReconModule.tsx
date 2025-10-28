@@ -8,6 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Search, Activity, Server, Globe, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 interface ScanResult {
   id: string;
@@ -41,24 +42,37 @@ const ReconModule = () => {
       description: `Initiating reconnaissance on ${target}`,
     });
 
-    // Simulate network scan
-    setTimeout(() => {
-      const mockResult: ScanResult = {
+    try {
+      const { data, error } = await supabase.functions.invoke('recon', {
+        body: { target },
+      });
+      if (error) throw error;
+
+      const api = data as any;
+      const mapped: ScanResult = {
         id: Date.now().toString(),
-        host: target,
-        ports: [22, 80, 443, 8080, 3306],
-        services: ["SSH", "HTTP", "HTTPS", "HTTP-ALT", "MySQL"],
-        status: "online",
-        timestamp: new Date().toLocaleString(),
+        host: api.host,
+        ports: (api.ports || []).map((p: any) => Number(p.port)),
+        services: (api.ports || []).map((p: any) => p.service || p.product || ''),
+        status: api.status || 'online',
+        timestamp: new Date(api.timestamp || Date.now()).toLocaleString(),
       };
 
-      setResults((prev) => [mockResult, ...prev]);
-      setScanning(false);
+      setResults((prev) => [mapped, ...prev]);
       toast({
         title: "Scan Complete",
-        description: `Found ${mockResult.ports.length} open ports on ${target}`,
+        description: `Found ${mapped.ports.length} open ports on ${api.host}`,
       });
-    }, 3000);
+    } catch (e) {
+      console.error(e);
+      toast({
+        title: "Scan Failed",
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    } finally {
+      setScanning(false);
+    }
   };
 
   return (
