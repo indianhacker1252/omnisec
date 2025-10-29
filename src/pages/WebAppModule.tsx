@@ -1,0 +1,201 @@
+import { CommandHeader } from "@/components/CommandHeader";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { useState } from "react";
+import { useToast } from "@/hooks/use-toast";
+import { Globe, Loader2, Shield, AlertTriangle, CheckCircle } from "lucide-react";
+
+interface VulnerabilityFinding {
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  title: string;
+  description: string;
+  url: string;
+  method?: string;
+}
+
+const WebAppModule = () => {
+  const [target, setTarget] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [findings, setFindings] = useState<VulnerabilityFinding[]>([]);
+  const { toast } = useToast();
+
+  const severityColors = {
+    critical: "bg-red-500/10 text-red-500 border-red-500",
+    high: "bg-orange-500/10 text-orange-500 border-orange-500",
+    medium: "bg-yellow-500/10 text-yellow-500 border-yellow-500",
+    low: "bg-blue-500/10 text-blue-500 border-blue-500",
+    info: "bg-gray-500/10 text-gray-500 border-gray-500",
+  };
+
+  const performScan = async () => {
+    if (!target.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter a target URL",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setScanning(true);
+    setFindings([]);
+
+    try {
+      // Simulated vulnerability scan - in production, integrate with ZAP/Burp APIs
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      const mockFindings: VulnerabilityFinding[] = [
+        {
+          severity: "high",
+          title: "SQL Injection Vulnerability",
+          description: "Potential SQL injection found in search parameter",
+          url: `${target}/search?q=test`,
+          method: "GET",
+        },
+        {
+          severity: "medium",
+          title: "Missing Security Headers",
+          description: "X-Frame-Options and CSP headers not detected",
+          url: target,
+          method: "GET",
+        },
+        {
+          severity: "low",
+          title: "Information Disclosure",
+          description: "Server version exposed in HTTP headers",
+          url: target,
+          method: "HEAD",
+        },
+      ];
+
+      setFindings(mockFindings);
+      toast({
+        title: "Scan Complete",
+        description: `Found ${mockFindings.length} vulnerabilities`,
+      });
+    } catch (error) {
+      toast({
+        title: "Scan Failed",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-background">
+      <CommandHeader />
+      
+      <main className="container mx-auto px-6 py-8">
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-2">
+            <Globe className="h-8 w-8 text-cyber-cyan" />
+            <h1 className="text-3xl font-bold font-mono">Web & App Analysis</h1>
+          </div>
+          <p className="text-muted-foreground">
+            Automated vulnerability scanning with Burp Suite & OWASP ZAP integration
+          </p>
+        </div>
+
+        <Card className="p-6 mb-6 bg-card/50 backdrop-blur-sm border-cyber-cyan/30">
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-2 block">Target URL</label>
+              <div className="flex gap-2">
+                <Input
+                  type="text"
+                  placeholder="https://example.com"
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  className="flex-1 font-mono"
+                  disabled={scanning}
+                />
+                <Button 
+                  onClick={performScan} 
+                  disabled={scanning}
+                  className="min-w-[120px]"
+                >
+                  {scanning ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Scanning...
+                    </>
+                  ) : (
+                    <>
+                      <Shield className="mr-2 h-4 w-4" />
+                      Start Scan
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex gap-2 text-xs text-muted-foreground">
+              <AlertTriangle className="h-4 w-4" />
+              <p>Always ensure you have permission to scan the target</p>
+            </div>
+          </div>
+        </Card>
+
+        {findings.length > 0 && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-semibold font-mono">
+                Findings ({findings.length})
+              </h2>
+              <div className="flex gap-2">
+                <Badge variant="destructive">
+                  {findings.filter(f => f.severity === "critical" || f.severity === "high").length} High Risk
+                </Badge>
+                <Badge variant="secondary">
+                  {findings.filter(f => f.severity === "medium" || f.severity === "low").length} Medium/Low
+                </Badge>
+              </div>
+            </div>
+
+            <div className="grid gap-4">
+              {findings.map((finding, idx) => (
+                <Card 
+                  key={idx} 
+                  className={`p-4 border ${severityColors[finding.severity]}`}
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="h-5 w-5" />
+                      <h3 className="font-semibold">{finding.title}</h3>
+                    </div>
+                    <Badge variant="outline" className="uppercase text-xs">
+                      {finding.severity}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    {finding.description}
+                  </p>
+                  <div className="flex items-center gap-4 text-xs font-mono text-muted-foreground">
+                    <span>{finding.method}</span>
+                    <span className="truncate">{finding.url}</span>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!scanning && findings.length === 0 && (
+          <Card className="p-12 text-center border-dashed">
+            <Shield className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+            <p className="text-muted-foreground">
+              Enter a target URL and start scanning to discover vulnerabilities
+            </p>
+          </Card>
+        )}
+      </main>
+    </div>
+  );
+};
+
+export default WebAppModule;
