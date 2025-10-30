@@ -1,18 +1,48 @@
-# OmniSec Integration Guide
+# OmniSec Integration Guide - Advanced Security Operations Platform
 
-## 🚀 Complete Integration & Setup Manual
+## 🎯 Overview
 
-This guide will help you integrate all OmniSec modules with real security tools and APIs for production-ready cybersecurity operations.
+This platform is a **command-and-control interface** for security operations, integrating with industry-standard tools and providing an AI-powered assistant for automated penetration testing workflows.
+
+**Built with 100 years of hacking wisdom. No laziness, pure excellence.** 🔥
 
 ---
 
 ## 📋 Table of Contents
 
-1. [System Requirements](#system-requirements)
-2. [API Keys & Credentials](#api-keys--credentials)
-3. [Module Integration](#module-integration)
-4. [Security Best Practices](#security-best-practices)
-5. [Troubleshooting](#troubleshooting)
+1. [Quick Start](#quick-start)
+2. [API Keys Setup](#api-keys-setup)
+3. [Tool Integration (Kali Linux)](#tool-integration-kali-linux)
+4. [AI Command Integration](#ai-command-integration)
+5. [Python VAPT Integration](#python-vapt-integration)
+6. [Module-Tool Mapping](#module-tool-mapping)
+7. [Security Scanning](#security-scanning)
+8. [Troubleshooting](#troubleshooting)
+
+---
+
+## 🚀 Quick Start
+
+### How to Add API Keys
+
+**No popups, add them when you need them in Settings:**
+
+1. Navigate to `/settings` in the app
+2. Check "Integrations" section for current status
+3. When you need an API key, ask the AI in chat:
+   ```
+   "Add SHODAN_API_KEY secret"
+   "Add NVD_API_KEY secret"
+   ```
+4. AI will prompt you with a secure input form
+5. Enter your key, it's stored encrypted in backend
+
+**Required Keys:**
+- `SHODAN_API_KEY` - For real reconnaissance data (required)
+- `NVD_API_KEY` - For enhanced CVE data (optional)
+- `OPENAI_API_KEY` - For custom AI models (optional, Lovable AI is pre-enabled)
+
+---
 
 ---
 

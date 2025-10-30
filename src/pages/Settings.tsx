@@ -60,14 +60,21 @@ const Settings = () => {
           </Card>
 
           <Card className="p-6 bg-card/50 backdrop-blur-sm">
-            <h2 className="text-lg font-semibold mb-4 font-mono">Requirements</h2>
-            <ul className="list-disc pl-5 space-y-2 text-sm text-muted-foreground">
-              <li>To enable real Recon data, provide a Shodan API key.</li>
-              <li>For richer CVE results, optionally add an NVD API key.</li>
-              <li>AI chat uses the built-in Lovable AI gateway—no key needed.</li>
-              <li>Keys are stored securely in the backend and never exposed to the browser.</li>
-            </ul>
-            <p className="text-xs text-muted-foreground mt-3">Add or update keys via the assistant in this chat—I'll prompt you when needed.</p>
+            <h2 className="text-lg font-semibold mb-4 font-mono">How to Add API Keys</h2>
+            <div className="space-y-3 text-sm text-muted-foreground">
+              <p>API keys are required for certain features:</p>
+              <ul className="list-disc pl-5 space-y-2">
+                <li><strong>Shodan API Key</strong>: Required for real reconnaissance data</li>
+                <li><strong>NVD API Key</strong>: Optional for enhanced CVE vulnerability data</li>
+                <li><strong>AI Gateway</strong>: Pre-configured, no key needed</li>
+              </ul>
+              <div className="mt-4 p-3 bg-muted/50 rounded border border-border">
+                <p className="font-mono text-xs">To add API keys, ask the AI assistant in chat:</p>
+                <p className="font-mono text-xs mt-2 text-primary">"Add SHODAN_API_KEY secret"</p>
+                <p className="font-mono text-xs text-primary">"Add NVD_API_KEY secret"</p>
+              </div>
+              <p className="text-xs mt-3">Keys are encrypted and stored securely in the backend, never exposed to the browser.</p>
+            </div>
           </Card>
         </div>
       </main>

@@ -9,6 +9,11 @@ import { supabase } from "@/integrations/supabase/client";
 interface Message {
   role: "user" | "assistant";
   content: string;
+  metadata?: {
+    command?: string;
+    target?: string;
+    action?: string;
+  };
 }
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`;
@@ -98,7 +103,30 @@ export const AIAssistant = () => {
 
   const handleSend = async () => {
     if (!input.trim() || loading) return;
-    const userMsg: Message = { role: "user", content: input };
+    
+    // Parse command from user input
+    const commandPatterns = [
+      { regex: /scan\s+network\s+(.+)/i, action: 'scan_network' },
+      { regex: /scan\s+(.+)/i, action: 'scan' },
+      { regex: /find\s+vulnerabilities?\s+(?:in|on)\s+(.+)/i, action: 'vuln_scan' },
+      { regex: /enumerate\s+(.+)/i, action: 'enumerate' },
+      { regex: /exploit\s+(.+)/i, action: 'exploit' }
+    ];
+    
+    let metadata: Message['metadata'] = undefined;
+    for (const pattern of commandPatterns) {
+      const match = input.match(pattern.regex);
+      if (match) {
+        metadata = {
+          command: pattern.action,
+          target: match[1].trim(),
+          action: pattern.action
+        };
+        break;
+      }
+    }
+    
+    const userMsg: Message = { role: "user", content: input, metadata };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setLoading(true);
