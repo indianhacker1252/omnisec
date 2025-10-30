@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.status]
 verify_jwt = false
+
+[functions.vapt-assistant]
+verify_jwt = false

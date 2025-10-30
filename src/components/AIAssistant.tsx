@@ -106,14 +106,19 @@ export const AIAssistant = () => {
     
     // Parse command from user input
     const commandPatterns = [
-      { regex: /scan\s+network\s+(.+)/i, action: 'scan_network' },
-      { regex: /scan\s+(.+)/i, action: 'scan' },
-      { regex: /find\s+vulnerabilities?\s+(?:in|on)\s+(.+)/i, action: 'vuln_scan' },
-      { regex: /enumerate\s+(.+)/i, action: 'enumerate' },
-      { regex: /exploit\s+(.+)/i, action: 'exploit' }
+      { regex: /scan\s+network\s+(.+)/i, action: 'scan_network', module: 'recon' },
+      { regex: /scan\s+ports?\s+(?:on|of)?\s*(.+)/i, action: 'port_scan', module: 'recon' },
+      { regex: /find\s+vulnerabilities?\s+(?:in|on)\s+(.+)/i, action: 'vuln_scan', module: 'vulnintel' },
+      { regex: /check\s+(?:for\s+)?(?:sql\s+injection|xss|vulnerabilities)\s+(?:on|in)\s+(.+)/i, action: 'web_scan', module: 'webapp' },
+      { regex: /enumerate\s+(?:subdomains?|directories?|services?)\s+(?:of|on|for)\s+(.+)/i, action: 'enumerate', module: 'recon' },
+      { regex: /exploit\s+(.+)/i, action: 'exploit', module: 'redteam' },
+      { regex: /analyze\s+(.+)/i, action: 'analyze', module: 'analysis' },
+      { regex: /perform\s+(?:full\s+)?(?:security\s+)?(?:audit|scan)\s+(?:on\s+)?(.+)/i, action: 'full_audit', module: 'all' }
     ];
     
     let metadata: Message['metadata'] = undefined;
+    let autoExecute = false;
+    
     for (const pattern of commandPatterns) {
       const match = input.match(pattern.regex);
       if (match) {
@@ -122,11 +127,60 @@ export const AIAssistant = () => {
           target: match[1].trim(),
           action: pattern.action
         };
-        break;
+        autoExecute = true;
+        
+        // Auto-execute the command
+        const executionMsg: Message = {
+          role: "assistant",
+          content: `🔍 **Command Detected**: ${pattern.action}\n🎯 **Target**: ${match[1].trim()}\n⚙️ **Module**: ${pattern.module}\n\n⏳ Executing security operation...`
+        };
+        setMessages((prev) => [...prev, { role: "user", content: input, metadata }, executionMsg]);
+        setInput("");
+        setLoading(true);
+        
+        // Execute based on module
+        try {
+          let result = '';
+          if (pattern.module === 'recon') {
+            const { data, error } = await supabase.functions.invoke('recon', {
+              body: { target: match[1].trim() }
+            });
+            if (error) throw error;
+            result = `✅ **Recon Complete**\n\n**Host**: ${data.host}\n**IP**: ${data.ip}\n**Status**: ${data.status}\n\n**Open Ports**:\n${data.ports.map((p: any) => `- Port ${p.port}: ${p.service} (${p.product || 'Unknown'})`).join('\n')}`;
+          } else if (pattern.module === 'vulnintel') {
+            const { data, error } = await supabase.functions.invoke('vulnintel', {
+              body: { query: match[1].trim() }
+            });
+            if (error) throw error;
+            result = `✅ **Vulnerability Scan Complete**\n\n**Found**: ${data.count} vulnerabilities\n\n${data.vulnerabilities.slice(0, 3).map((v: any) => `**${v.id}**\n- Severity: ${v.severity}\n- CVSS: ${v.cvss}\n- ${v.description.substring(0, 100)}...`).join('\n\n')}`;
+          } else {
+            // Use VAPT assistant for other commands
+            const { data, error } = await supabase.functions.invoke('vapt-assistant', {
+              body: { 
+                prompt: `Execute command: ${pattern.action} on target: ${match[1].trim()}. Provide a detailed security assessment report.`,
+                mode: 'security'
+              }
+            });
+            if (error) throw error;
+            result = `✅ **Analysis Complete**\n\n${data.answer}`;
+          }
+          
+          setMessages((prev) => [...prev, { role: "assistant", content: result }]);
+        } catch (error: any) {
+          console.error('Command execution error:', error);
+          setMessages((prev) => [...prev, { 
+            role: "assistant", 
+            content: `❌ **Error**: ${error.message || 'Failed to execute command'}\n\nPlease check your API keys in Settings or try again.` 
+          }]);
+        } finally {
+          setLoading(false);
+        }
+        return;
       }
     }
     
-    const userMsg: Message = { role: "user", content: input, metadata };
+    // Regular chat if no command detected
+    const userMsg: Message = { role: "user", content: input };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setLoading(true);

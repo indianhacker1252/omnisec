@@ -1,9 +1,12 @@
 import { CommandHeader } from "@/components/CommandHeader";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Brain, TrendingUp, Activity, AlertTriangle } from "lucide-react";
+import { Brain, TrendingUp, Activity, AlertTriangle, ArrowLeft } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 const AIThreatModule = () => {
+  const navigate = useNavigate();
   const anomalies = [
     {
       timestamp: new Date().toISOString(),
@@ -40,6 +43,12 @@ const AIThreatModule = () => {
       <CommandHeader />
       
       <main className="container mx-auto px-6 py-8">
+        <div className="mb-6 flex items-center gap-4">
+          <Button variant="outline" onClick={() => navigate('/')} className="gap-2">
+            <ArrowLeft className="h-4 w-4" />
+            Back to Dashboard
+          </Button>
+        </div>
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-2">
             <Brain className="h-8 w-8 text-cyber-purple" />

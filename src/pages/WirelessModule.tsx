@@ -4,9 +4,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useState } from "react";
-import { Wifi, Bluetooth, Radio, Loader2, Signal } from "lucide-react";
+import { Wifi, Bluetooth, Radio, Loader2, Signal, ArrowLeft } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 const WirelessModule = () => {
+  const navigate = useNavigate();
   const [scanning, setScanning] = useState(false);
   const [networks, setNetworks] = useState<any[]>([]);
 
@@ -55,6 +57,12 @@ const WirelessModule = () => {
       <CommandHeader />
       
       <main className="container mx-auto px-6 py-8">
+        <div className="mb-6 flex items-center gap-4">
+          <Button variant="outline" onClick={() => navigate('/')} className="gap-2">
+            <ArrowLeft className="h-4 w-4" />
+            Back to Dashboard
+          </Button>
+        </div>
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-2">
             <Wifi className="h-8 w-8 text-cyber-cyan" />

@@ -30,7 +30,16 @@ export const CommandHeader = () => {
               <span className="text-sm font-mono">System Operational</span>
             </div>
             
-            <Button variant="ghost" size="icon" className="relative">
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              className="relative"
+              onClick={() => {
+                // Show alerts/notifications
+                alert('🔔 Security Alerts:\n\n1. New CVE detected: CVE-2024-1234 (Critical)\n2. Suspicious activity on network\n3. Port scan detected from 192.168.1.x\n\nNavigate to modules for detailed analysis.');
+              }}
+              aria-label="View alerts"
+            >
               <Bell className="h-5 w-5" />
               <Badge className="absolute -top-1 -right-1 h-5 w-5 p-0 flex items-center justify-center" variant="destructive">
                 3
