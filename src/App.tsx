@@ -15,6 +15,7 @@ import ReverseEngModule from "./pages/ReverseEngModule";
 import AIThreatModule from "./pages/AIThreatModule";
 import EthicsModule from "./pages/EthicsModule";
 import MalwareDevModule from "./pages/MalwareDevModule";
+import KaliIntegration from "./pages/KaliIntegration";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 
@@ -39,6 +40,7 @@ const App = () => (
           <Route path="/aithreat" element={<AIThreatModule />} />
           <Route path="/ethics" element={<EthicsModule />} />
           <Route path="/malware-dev" element={<MalwareDevModule />} />
+          <Route path="/kali" element={<KaliIntegration />} />
           <Route path="/settings" element={<Settings />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />

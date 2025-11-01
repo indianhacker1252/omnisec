@@ -15,6 +15,8 @@ import {
   Code,
   Brain,
   Scale,
+  Terminal,
+  Skull,
 } from "lucide-react";
 
 const Dashboard = () => {
@@ -91,6 +93,20 @@ const Dashboard = () => {
       icon: Scale,
       status: "active" as const,
       path: "/ethics",
+    },
+    {
+      title: "Malware Development",
+      description: "Educational malware creation and reverse engineering",
+      icon: Skull,
+      status: "idle" as const,
+      path: "/malware-dev",
+    },
+    {
+      title: "Kali Integration",
+      description: "Remote SSH connection and tool execution",
+      icon: Terminal,
+      status: "idle" as const,
+      path: "/kali",
     },
   ];
 
