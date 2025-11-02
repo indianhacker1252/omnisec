@@ -1,3 +1,9 @@
+/**
+ * OmniSec™ Kali Linux Integration Module
+ * © 2024 HARSH MALIK. All Rights Reserved.
+ * Patent Pending - Remote Security Tool Execution
+ */
+
 import { CommandHeader } from "@/components/CommandHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";

@@ -1,3 +1,9 @@
+/**
+ * OmniSec™ AI Threat Intelligence Engine
+ * © 2024 HARSH MALIK. All Rights Reserved.
+ * Patent Pending - ML-Powered Threat Detection
+ */
+
 import { CommandHeader } from "@/components/CommandHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";

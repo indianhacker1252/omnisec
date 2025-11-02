@@ -1,3 +1,9 @@
+/**
+ * OmniSec™ Blue Team Defense Module
+ * © 2024 HARSH MALIK. All Rights Reserved.
+ * Patent Pending - Unified VAPT Platform
+ */
+
 import { CommandHeader } from "@/components/CommandHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";

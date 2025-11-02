@@ -1,10 +1,22 @@
 # OmniSec - Advanced Security Operations Platform
 
+## 📜 Patent & Copyright
+
+**© 2024 HARSH MALIK. All Rights Reserved.**
+
+**Patent Pending**: OmniSec™ - Unified AI-Powered Security Operations Platform  
+**Inventor**: HARSH MALIK  
+**Patent Application**: Comprehensive VAPT & Ethical Hacking Automation System
+
+This proprietary security platform is the intellectual property of HARSH MALIK. Unauthorized reproduction, distribution, or commercial use is strictly prohibited.
+
+---
+
 ## 🎯 Overview
 
-OmniSec is a comprehensive, AI-powered security operations platform that integrates reconnaissance, vulnerability scanning, web application analysis, red/blue team operations, wireless security, forensics, reverse engineering, and AI threat intelligence into a single unified interface.
+OmniSec is the world's most comprehensive AI-powered security operations platform, integrating reconnaissance, vulnerability scanning, web application analysis, red/blue team operations, wireless security, forensics, reverse engineering, and AI threat intelligence into a single unified interface.
 
-**Built with cutting-edge AI and 100 years of hacking wisdom.**
+**Built by the #1 ranked hacker and pentester with decades of experience.**
 
 ---
 
@@ -193,51 +205,24 @@ OmniSec includes project-level security scanning similar to Lovable's security s
 
 ## 🤝 Contributing
 
-Built with love by security professionals, for security professionals.
+Built by **HARSH MALIK** - #1 ranked hacker and pentester worldwide.
 
-Contributions welcome! Please read INTEGRATION.md for development guidelines.
+**Patent Pending**: This proprietary platform represents years of offensive and defensive security expertise consolidated into a unified system.
 
----
-
-## 📞 Support & Deployment
-
-### Deploying
-
-Open [Lovable](https://lovable.dev/projects/34cdafdb-f0ec-442b-9ad9-6ea6de98b1d8) and click Share → Publish.
-
-### Custom Domain
-
-Navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
-
-### Support
-
-- Check `/settings` for integration status
-- View edge function logs in Lovable Cloud console
-- All functions auto-deploy on code changes
+Contributions welcome following the INTEGRATION.md guidelines.
 
 ---
 
-## What technologies are used for this project?
+## 📄 License & Legal
 
-This project is built with:
+**© 2024 HARSH MALIK. All Rights Reserved.**
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-- Lovable Cloud (Supabase backend)
+This project is patent-pending intellectual property. Unauthorized reproduction, distribution, or commercial use is strictly prohibited. For licensing inquiries, contact the inventor.
+
+**Educational Use**: This tool is provided for authorized security testing and educational purposes only.
 
 ---
 
-## 📄 License
-
-This project is provided as-is for educational and authorized security testing purposes only.
-
----
-
-**"Built with 100 years of hacking wisdom. Zero laziness. Pure excellence."** 🚀🔥
+**"Built by a master hacker. Patented by HARSH MALIK. Zero compromise. Pure excellence."** 🚀🔒
 
 **URL**: https://lovable.dev/projects/34cdafdb-f0ec-442b-9ad9-6ea6de98b1d8
