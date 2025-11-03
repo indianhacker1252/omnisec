@@ -13,6 +13,7 @@ import { useState } from "react";
 import { Wifi, Bluetooth, Radio, Loader2, Signal, ArrowLeft, Shield, AlertTriangle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 const WirelessModule = () => {
   const navigate = useNavigate();

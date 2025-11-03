@@ -8,15 +8,45 @@ import { CommandHeader } from "@/components/CommandHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
-import { Terminal, Target, Users, Activity, Globe, Lock, Zap, ArrowLeft, Download, Key, Shield } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { Terminal, Target, Users, Activity, Globe, Lock, Zap, ArrowLeft, Download, Key, Shield, Code } from "lucide-react";
 
 const RedTeamModule = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [selectedPayload, setSelectedPayload] = useState<string | null>(null);
+  const [target, setTarget] = useState("");
+  const [port, setPort] = useState("4444");
+  const [generating, setGenerating] = useState(false);
+  const [generatedPayload, setGeneratedPayload] = useState<any>(null);
+
+  const generatePayload = async (type: string) => {
+    if (type === "reverse-shell" && !target.trim()) {
+      toast({ title: "Error", description: "Enter target IP for reverse shell", variant: "destructive" });
+      return;
+    }
+    setGenerating(true);
+    setSelectedPayload(type);
+    try {
+      const { data, error } = await supabase.functions.invoke('payload-generator', {
+        body: { type, target, port: parseInt(port), options: {} }
+      });
+      if (error) throw error;
+      if (data.success) {
+        setGeneratedPayload(data);
+        toast({ title: "Payload Generated", description: "Ready to use" });
+      }
+    } catch (error: any) {
+      toast({ title: "Failed", description: error.message, variant: "destructive" });
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const payloadTypes = [
     { name: "Reverse Shell", icon: Terminal, description: "Netcat, Bash, PowerShell", category: "shells" },

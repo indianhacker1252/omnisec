@@ -13,6 +13,7 @@ import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { Globe, Loader2, Shield, AlertTriangle, CheckCircle, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
 
 interface VulnerabilityFinding {
   severity: "critical" | "high" | "medium" | "low" | "info";
@@ -49,80 +50,26 @@ const WebAppModule = () => {
 
     setScanning(true);
     setFindings([]);
+    toast({ title: "Scanning Started", description: `Initiating scan on ${target}` });
 
     try {
-      // Enhanced vulnerability scan with comprehensive checks
-      toast({ title: "Scanning Started", description: "Running comprehensive security tests..." });
-      await new Promise(resolve => setTimeout(resolve, 3500));
-      
-      const mockFindings: VulnerabilityFinding[] = [
-        {
-          severity: "critical",
-          title: "Remote Code Execution (RCE)",
-          description: "Unsanitized user input allows arbitrary code execution via eval()",
-          url: `${target}/api/execute`,
-          method: "POST",
-        },
-        {
-          severity: "high",
-          title: "SQL Injection Vulnerability",
-          description: "Potential SQL injection found in search parameter - allows database extraction",
-          url: `${target}/search?q=test' OR '1'='1`,
-          method: "GET",
-        },
-        {
-          severity: "high",
-          title: "Cross-Site Scripting (XSS)",
-          description: "Reflected XSS vulnerability in user input field",
-          url: `${target}/profile?name=<script>alert(1)</script>`,
-          method: "GET",
-        },
-        {
-          severity: "medium",
-          title: "Missing Security Headers",
-          description: "X-Frame-Options, CSP, and HSTS headers not detected - clickjacking risk",
-          url: target,
-          method: "HEAD",
-        },
-        {
-          severity: "medium",
-          title: "Insecure Direct Object Reference",
-          description: "User IDs are sequential and not validated - unauthorized access possible",
-          url: `${target}/api/user/1234`,
-          method: "GET",
-        },
-        {
-          severity: "low",
-          title: "Information Disclosure",
-          description: "Server version exposed in HTTP headers (Apache/2.4.41)",
-          url: target,
-          method: "HEAD",
-        },
-        {
-          severity: "low",
-          title: "Directory Listing Enabled",
-          description: "Web server allows directory browsing",
-          url: `${target}/uploads/`,
-          method: "GET",
-        },
-        {
-          severity: "info",
-          title: "HTTPS Not Enforced",
-          description: "Website accessible via HTTP without redirect to HTTPS",
-          url: target.replace("https://", "http://"),
-          method: "GET",
-        },
-      ];
-
-      setFindings(mockFindings);
-      toast({
-        title: "Scan Complete",
-        description: `Found ${mockFindings.length} vulnerabilities`,
+      const { data, error } = await supabase.functions.invoke('webapp-scan', {
+        body: { target }
       });
-    } catch (error) {
+
+      if (error) throw error;
+
+      if (data.success && data.findings) {
+        setFindings(data.findings);
+        toast({
+          title: "Scan Complete",
+          description: `Found ${data.findings.length} issues in ${(data.scanTime / 1000).toFixed(2)}s`,
+        });
+      }
+    } catch (error: any) {
       toast({
         title: "Scan Failed",
-        description: error instanceof Error ? error.message : "Unknown error",
+        description: error.message || "Failed to complete scan",
         variant: "destructive",
       });
     } finally {
