@@ -1,5 +1,28 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
+function validateTarget(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname;
+    
+    const blockedPatterns = [
+      /^10\./,
+      /^172\.(1[6-9]|2[0-9]|3[01])\./,
+      /^192\.168\./,
+      /^127\./,
+      /^169\.254\./,
+      /^0\./,
+      /localhost/i,
+      /metadata/i,
+      /internal/i,
+    ];
+    
+    return !blockedPatterns.some(p => p.test(hostname));
+  } catch {
+    return false;
+  }
+}
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -10,10 +33,19 @@ serve(async (req) => {
 
   try {
     const { target } = await req.json();
-    console.log("Starting web app scan for:", target);
-
+    
     if (!target) {
-      throw new Error("Target URL is required");
+      return new Response(
+        JSON.stringify({ error: "Invalid request" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!validateTarget(target)) {
+      return new Response(
+        JSON.stringify({ error: "Invalid target URL" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     const findings = [];
@@ -24,7 +56,10 @@ serve(async (req) => {
     try {
       url = new URL(target.startsWith('http') ? target : `https://${target}`);
     } catch {
-      throw new Error("Invalid URL format");
+      return new Response(
+        JSON.stringify({ error: "Invalid URL format" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     console.log("Scanning:", url.toString());

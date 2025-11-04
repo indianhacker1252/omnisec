@@ -4,7 +4,7 @@
  * Patent Pending - Unified VAPT Platform
  */
 
-import { Bell, Settings, Terminal } from "lucide-react";
+import { Bell, Settings, Terminal, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
 
 export const CommandHeader = () => {
   const navigate = useNavigate();
@@ -35,6 +36,23 @@ export const CommandHeader = () => {
       title: "Alerts Cleared",
       description: "All notifications have been cleared",
     });
+  };
+
+  const handleSignOut = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      toast({
+        title: "Error",
+        description: "Failed to sign out",
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Signed Out",
+        description: "You have been signed out successfully",
+      });
+      navigate("/auth");
+    }
   };
 
   return (
@@ -113,6 +131,15 @@ export const CommandHeader = () => {
             onClick={() => navigate("/settings")}
           >
             <Settings className="h-5 w-5" />
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleSignOut}
+            title="Sign Out"
+          >
+            <LogOut className="h-5 w-5" />
           </Button>
         </div>
       </div>

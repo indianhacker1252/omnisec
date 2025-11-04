@@ -15,6 +15,24 @@ type ReconResult = {
   timestamp: string;
 };
 
+function validateTarget(target: string): boolean {
+  const blockedPatterns = [
+    /^10\./,
+    /^172\.(1[6-9]|2[0-9]|3[01])\./,
+    /^192\.168\./,
+    /^127\./,
+    /^169\.254\./,
+    /^0\./,
+    /^224\./,
+    /^240\./,
+    /localhost/i,
+    /metadata/i,
+    /internal/i,
+  ];
+  
+  return !blockedPatterns.some(p => p.test(target));
+}
+
 async function resolveARecord(host: string): Promise<string | null> {
   try {
     const r = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(host)}&type=A`);
@@ -33,26 +51,33 @@ serve(async (req) => {
   try {
     const { target } = await req.json();
     if (!target || typeof target !== "string") {
-      return new Response(JSON.stringify({ error: "Missing target" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: "Invalid request" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    if (!validateTarget(target)) {
+      return new Response(JSON.stringify({ error: "Invalid target address" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     const SHODAN_API_KEY = Deno.env.get("SHODAN_API_KEY");
     if (!SHODAN_API_KEY) {
-      return new Response(JSON.stringify({ error: "SHODAN_API_KEY not configured. Please add it in backend settings." }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: "Service not configured" }), { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     // If target is IP keep it, else resolve
     const ipRegex = /^(?:\d{1,3}\.){3}\d{1,3}$/;
     const ip = ipRegex.test(target) ? target : (await resolveARecord(target));
     if (!ip) {
-      return new Response(JSON.stringify({ error: "Could not resolve target to an IPv4 address" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: "Invalid target" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    if (!validateTarget(ip)) {
+      return new Response(JSON.stringify({ error: "Invalid target address" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     const shodanResp = await fetch(`https://api.shodan.io/shodan/host/${ip}?key=${SHODAN_API_KEY}`);
     if (!shodanResp.ok) {
-      const t = await shodanResp.text();
-      console.error("shodan error", shodanResp.status, t);
-      return new Response(JSON.stringify({ error: "Shodan API error", details: t }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      console.error("shodan error", shodanResp.status);
+      return new Response(JSON.stringify({ error: "External service error" }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
     const shodan = await shodanResp.json();
 
