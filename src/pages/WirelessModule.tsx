@@ -27,144 +27,113 @@ const WirelessModule = () => {
   const startScan = async () => {
     setScanning(true);
     toast({ title: "WiFi Scan", description: "Scanning for wireless networks..." });
-    await new Promise(resolve => setTimeout(resolve, 2500));
     
-    setNetworks([
-      {
-        ssid: "HomeNetwork_5G",
-        bssid: "A4:CF:12:34:56:78",
-        channel: 149,
-        security: "WPA2-PSK",
-        signal: -45,
-        encryption: "CCMP",
-        vulnerabilities: ["WPS Enabled", "Weak Password"],
-        clients: 12,
-      },
-      {
-        ssid: "OfficeWiFi",
-        bssid: "B8:27:EB:A1:B2:C3",
-        channel: 6,
-        security: "WPA3",
-        signal: -62,
-        encryption: "CCMP",
-        vulnerabilities: [],
-        clients: 7,
-      },
-      {
-        ssid: "GuestNetwork",
-        bssid: "DC:9F:DB:12:34:56",
-        channel: 11,
-        security: "Open",
-        signal: -78,
-        encryption: "None",
-        vulnerabilities: ["No Encryption", "Open Network"],
-        clients: 3,
-      },
-      {
-        ssid: "Corp_WiFi",
-        bssid: "E2:3A:FF:12:88:99",
-        channel: 36,
-        security: "WPA-PSK",
-        signal: -55,
-        encryption: "TKIP",
-        vulnerabilities: ["WPA1 Deprecated", "TKIP Vulnerable", "Possible KRACK"],
-        clients: 23,
-      },
-    ]);
-    setScanning(false);
-    toast({ title: "Scan Complete", description: `Found ${4} wireless networks` });
+    try {
+      const { data, error } = await supabase.functions.invoke('wireless-scan', {
+        body: { scanType: 'wifi' }
+      });
+
+      if (error) throw error;
+      
+      setNetworks(data.results || []);
+      setScanning(false);
+      toast({ 
+        title: "Scan Complete", 
+        description: `Found ${data.results?.length || 0} wireless networks` 
+      });
+    } catch (error: any) {
+      console.error('WiFi scan error:', error);
+      setScanning(false);
+      toast({
+        title: "Scan Failed",
+        description: error.message || "Failed to scan wireless networks",
+        variant: "destructive"
+      });
+    }
   };
 
   const startBleScan = async () => {
     setScanning(true);
     toast({ title: "BLE Scan", description: "Scanning for Bluetooth devices..." });
-    await new Promise(resolve => setTimeout(resolve, 2000));
     
-    setBleDevices([
-      {
-        name: "Samsung Galaxy S21",
-        address: "AA:BB:CC:DD:EE:01",
-        rssi: -67,
-        services: ["Heart Rate", "Battery Service"],
-        vulnerabilities: ["BlueBorne", "Unencrypted Pairing"],
-      },
-      {
-        name: "Apple AirPods Pro",
-        address: "AA:BB:CC:DD:EE:02",
-        rssi: -45,
-        services: ["Audio Sink", "AVRCP"],
-        vulnerabilities: [],
-      },
-      {
-        name: "Fitness Tracker",
-        address: "AA:BB:CC:DD:EE:03",
-        rssi: -82,
-        services: ["Device Information", "Heart Rate"],
-        vulnerabilities: ["Open Pairing", "No Authentication"],
-      },
-    ]);
-    setScanning(false);
-    toast({ title: "BLE Scan Complete", description: `Found ${3} Bluetooth devices` });
+    try {
+      const { data, error } = await supabase.functions.invoke('wireless-scan', {
+        body: { scanType: 'bluetooth' }
+      });
+
+      if (error) throw error;
+      
+      setBleDevices(data.results || []);
+      setScanning(false);
+      toast({ 
+        title: "BLE Scan Complete", 
+        description: `Found ${data.results?.length || 0} Bluetooth devices` 
+      });
+    } catch (error: any) {
+      console.error('BLE scan error:', error);
+      setScanning(false);
+      toast({
+        title: "Scan Failed",
+        description: error.message || "Failed to scan Bluetooth devices",
+        variant: "destructive"
+      });
+    }
   };
 
   const startNfcScan = async () => {
     setScanning(true);
     toast({ title: "NFC Scan", description: "Scanning for NFC tags..." });
-    await new Promise(resolve => setTimeout(resolve, 1500));
     
-    setNfcTags([
-      {
-        type: "MIFARE Classic 1K",
-        uid: "04:A1:B2:C3:D4:E5:F6",
-        size: "1KB",
-        writable: true,
-        vulnerabilities: ["Crypto1 Weakness", "Default Keys"],
-      },
-      {
-        type: "NTAG213",
-        uid: "04:B2:C3:D4:E5:F6:A1",
-        size: "180 bytes",
-        writable: false,
-        vulnerabilities: [],
-      },
-    ]);
-    setScanning(false);
-    toast({ title: "NFC Scan Complete", description: `Found ${2} NFC tags` });
+    try {
+      const { data, error } = await supabase.functions.invoke('wireless-scan', {
+        body: { scanType: 'nfc' }
+      });
+
+      if (error) throw error;
+      
+      setNfcTags(data.results || []);
+      setScanning(false);
+      toast({ 
+        title: "NFC Scan Complete", 
+        description: `Found ${data.results?.length || 0} NFC tags` 
+      });
+    } catch (error: any) {
+      console.error('NFC scan error:', error);
+      setScanning(false);
+      toast({
+        title: "Scan Failed",
+        description: error.message || "Failed to scan NFC tags",
+        variant: "destructive"
+      });
+    }
   };
 
   const startRfScan = async () => {
     setScanning(true);
     toast({ title: "RF Scan", description: "Analyzing radio frequency spectrum..." });
-    await new Promise(resolve => setTimeout(resolve, 2500));
     
-    setRfSignals([
-      {
-        frequency: "433.92 MHz",
-        modulation: "ASK/OOK",
-        strength: -54,
-        type: "Remote Control",
-        description: "Garage door opener signal",
-        vulnerable: true,
-      },
-      {
-        frequency: "868.35 MHz",
-        modulation: "FSK",
-        strength: -62,
-        type: "IoT Sensor",
-        description: "Temperature sensor transmission",
-        vulnerable: false,
-      },
-      {
-        frequency: "315.00 MHz",
-        modulation: "AM",
-        strength: -48,
-        type: "Key Fob",
-        description: "Car remote keyless entry",
-        vulnerable: true,
-      },
-    ]);
-    setScanning(false);
-    toast({ title: "RF Scan Complete", description: `Detected ${3} RF signals` });
+    try {
+      const { data, error } = await supabase.functions.invoke('wireless-scan', {
+        body: { scanType: 'rf' }
+      });
+
+      if (error) throw error;
+      
+      setRfSignals(data.results || []);
+      setScanning(false);
+      toast({ 
+        title: "RF Scan Complete", 
+        description: `Detected ${data.results?.length || 0} RF signals` 
+      });
+    } catch (error: any) {
+      console.error('RF scan error:', error);
+      setScanning(false);
+      toast({
+        title: "Scan Failed",
+        description: error.message || "Failed to scan RF spectrum",
+        variant: "destructive"
+      });
+    }
   };
 
   const getSignalStrength = (signal: number) => {

@@ -14,3 +14,12 @@ verify_jwt = false
 
 [functions.vapt-assistant]
 verify_jwt = false
+
+[functions.webapp-scan]
+verify_jwt = false
+
+[functions.wireless-scan]
+verify_jwt = false
+
+[functions.payload-generator]
+verify_jwt = false
