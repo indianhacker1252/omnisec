@@ -19,6 +19,7 @@ import AIThreatModule from "./pages/AIThreatModule";
 import EthicsModule from "./pages/EthicsModule";
 import MalwareDevModule from "./pages/MalwareDevModule";
 import KaliIntegration from "./pages/KaliIntegration";
+import AutonomousAttack from "./pages/AutonomousAttack";
 import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
@@ -168,6 +169,14 @@ const App = () => (
             element={
               <ProtectedRoute>
                 <KaliIntegration />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/autonomous"
+            element={
+              <ProtectedRoute>
+                <AutonomousAttack />
               </ProtectedRoute>
             }
           />

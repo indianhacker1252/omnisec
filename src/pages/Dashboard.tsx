@@ -17,6 +17,7 @@ import {
   Scale,
   Terminal,
   Skull,
+  Zap,
 } from "lucide-react";
 
 const Dashboard = () => {
@@ -107,6 +108,13 @@ const Dashboard = () => {
       icon: Terminal,
       status: "idle" as const,
       path: "/kali",
+    },
+    {
+      title: "Autonomous Attack",
+      description: "AI-powered self-learning penetration testing engine",
+      icon: Zap,
+      status: "active" as const,
+      path: "/autonomous",
     },
   ];
 
