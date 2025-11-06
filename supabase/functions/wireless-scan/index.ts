@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,7 +10,48 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
+    // Initialize Supabase client
+    const supabaseClient = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
+    );
+
+    // Authenticate user
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    // Check admin or analyst role
+    const { data: roles } = await supabaseClient
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", user.id);
+
+    const hasAccess = roles?.some((r: any) => ["admin", "analyst"].includes(r.role));
+    if (!hasAccess) {
+      return new Response(JSON.stringify({ 
+        error: "Analyst or Admin role required for wireless scanning" 
+      }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     const { scanType } = await req.json();
+    
+    // Input validation
+    if (!scanType || !["wifi", "bluetooth", "nfc", "rf"].includes(scanType)) {
+      return new Response(JSON.stringify({ error: "Invalid scan type" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     console.log("Starting wireless scan:", scanType);
 
     let results = [];
@@ -33,6 +75,20 @@ serve(async (req) => {
     }
 
     console.log(`Found ${results.length} ${scanType} items`);
+
+    // Audit log
+    await supabaseClient.from("security_audit_log").insert({
+      user_id: user.id,
+      action: "wireless_scan_completed",
+      resource_type: "wireless_network",
+      resource_id: scanType,
+      details: {
+        scan_type: scanType,
+        results_count: results.length,
+        timestamp: new Date().toISOString()
+      },
+      ip_address: req.headers.get("x-forwarded-for") || req.headers.get("cf-connecting-ip") || "unknown"
+    });
 
     return new Response(
       JSON.stringify({

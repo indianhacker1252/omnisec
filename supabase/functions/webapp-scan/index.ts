@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 function validateTarget(url: string): boolean {
   try {
@@ -32,6 +33,38 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
+    // Initialize Supabase client
+    const supabaseClient = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
+    );
+
+    // Authenticate user
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    // Check admin or analyst role
+    const { data: roles } = await supabaseClient
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", user.id);
+
+    const hasAccess = roles?.some((r: any) => ["admin", "analyst"].includes(r.role));
+    if (!hasAccess) {
+      return new Response(JSON.stringify({ 
+        error: "Analyst or Admin role required for web application scanning" 
+      }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     const { target } = await req.json();
     
     if (!target) {
@@ -189,6 +222,23 @@ serve(async (req) => {
 
     const scanTime = Date.now() - startTime;
     console.log(`Scan completed in ${scanTime}ms, found ${findings.length} issues`);
+
+    // Audit log
+    await supabaseClient.from("security_audit_log").insert({
+      user_id: user.id,
+      action: "webapp_scan_completed",
+      resource_type: "web_application",
+      resource_id: url.toString(),
+      details: {
+        target: url.toString(),
+        findings_count: findings.length,
+        critical_count: findings.filter((f: any) => f.severity === "critical").length,
+        high_count: findings.filter((f: any) => f.severity === "high").length,
+        scan_time_ms: scanTime,
+        timestamp: new Date().toISOString()
+      },
+      ip_address: req.headers.get("x-forwarded-for") || req.headers.get("cf-connecting-ip") || "unknown"
+    });
 
     return new Response(
       JSON.stringify({

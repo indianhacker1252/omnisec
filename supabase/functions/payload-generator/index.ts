@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,7 +10,60 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
+    // Initialize Supabase client
+    const supabaseClient = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
+    );
+
+    // Authenticate user
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    // Check admin role (payload generation is admin-only)
+    const { data: isAdmin } = await supabaseClient.rpc("has_role", {
+      _user_id: user.id,
+      _role: "admin"
+    });
+
+    if (!isAdmin) {
+      return new Response(JSON.stringify({ 
+        error: "Admin privileges required for payload generation" 
+      }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     const { type, target, port, options } = await req.json();
+    
+    // Input validation
+    if (!type || !["reverse-shell", "web-shell", "privilege-escalation", "credential-dump", "lateral-movement", "obfuscation"].includes(type)) {
+      return new Response(JSON.stringify({ error: "Invalid payload type" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    if (target && typeof target !== "string") {
+      return new Response(JSON.stringify({ error: "Invalid target" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    if (port && (typeof port !== "number" || port < 1 || port > 65535)) {
+      return new Response(JSON.stringify({ error: "Invalid port number" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
     console.log("Generating payload:", type, "for", target);
 
     let result: any;
@@ -36,6 +90,23 @@ serve(async (req) => {
       default:
         throw new Error("Unknown payload type");
     }
+
+    // Audit log
+    await supabaseClient.from("security_audit_log").insert({
+      user_id: user.id,
+      action: "payload_generated",
+      resource_type: "red_team_payload",
+      resource_id: target || type,
+      details: {
+        payload_type: type,
+        target: target,
+        port: port,
+        options: options,
+        shell_type: options?.shellType || options?.language || options?.platform || "default",
+        timestamp: new Date().toISOString()
+      },
+      ip_address: req.headers.get("x-forwarded-for") || req.headers.get("cf-connecting-ip") || "unknown"
+    });
 
     return new Response(
       JSON.stringify({

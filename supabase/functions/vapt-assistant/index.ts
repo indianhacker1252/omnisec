@@ -1,5 +1,6 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -19,8 +20,47 @@ serve(async (req) => {
   }
 
   try {
+    // Initialize Supabase client
+    const supabaseClient = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
+    );
+
+    // Authenticate user (VAPT assistant available to all authenticated users)
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     const { prompt, mode = 'security' }: VAPTRequest = await req.json();
-    console.log(`[VAPT] Processing request - Mode: ${mode}, Prompt: ${prompt}`);
+    
+    // Input validation
+    if (!prompt || typeof prompt !== "string") {
+      return new Response(JSON.stringify({ error: "Invalid prompt" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    if (prompt.length > 10000) {
+      return new Response(JSON.stringify({ error: "Prompt too long (max 10000 chars)" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    if (mode && !['security', 'analysis', 'recon', 'exploit'].includes(mode)) {
+      return new Response(JSON.stringify({ error: "Invalid mode" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    console.log(`[VAPT] Processing request - Mode: ${mode}, User: ${user.id}`);
 
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
     if (!lovableApiKey) {
@@ -130,6 +170,21 @@ CRITICAL: Only provide exploit guidance for authorized penetration testing. Alwa
     const answer = data.choices?.[0]?.message?.content || 'No response generated';
 
     console.log('[VAPT] Response generated successfully');
+
+    // Audit log
+    await supabaseClient.from("security_audit_log").insert({
+      user_id: user.id,
+      action: "vapt_assistant_query",
+      resource_type: "ai_assistant",
+      resource_id: mode,
+      details: {
+        mode: mode,
+        prompt_preview: prompt.substring(0, 200),
+        response_length: answer.length,
+        timestamp: new Date().toISOString()
+      },
+      ip_address: req.headers.get("x-forwarded-for") || req.headers.get("cf-connecting-ip") || "unknown"
+    });
 
     return new Response(JSON.stringify({ 
       answer,

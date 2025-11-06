@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -11,9 +12,33 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
+    // Initialize Supabase client
+    const supabaseClient = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
+    );
+
+    // Authenticate user (CVE intel available to all authenticated users)
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     const { query } = await req.json();
     if (!query || typeof query !== "string") {
       return new Response(JSON.stringify({ error: "Missing query" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // Input validation
+    if (query.length > 500) {
+      return new Response(JSON.stringify({ error: "Query too long (max 500 chars)" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
     }
 
     const NVD_API_KEY = Deno.env.get("NVD_API_KEY");
@@ -55,6 +80,20 @@ serve(async (req) => {
         severity: (severity || "unknown").toLowerCase(),
         timestamp: cve.published || cve.lastModified || new Date().toISOString(),
       };
+    });
+
+    // Audit log
+    await supabaseClient.from("security_audit_log").insert({
+      user_id: user.id,
+      action: "cve_search_completed",
+      resource_type: "vulnerability_intelligence",
+      resource_id: query,
+      details: {
+        query: query,
+        results_count: vulns.length,
+        timestamp: new Date().toISOString()
+      },
+      ip_address: req.headers.get("x-forwarded-for") || req.headers.get("cf-connecting-ip") || "unknown"
     });
 
     return new Response(JSON.stringify({ count: vulns.length, vulnerabilities: vulns }), {
