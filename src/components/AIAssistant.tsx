@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -100,6 +100,12 @@ export const AIAssistant = () => {
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const handleSend = async () => {
     if (!input.trim() || loading) return;
@@ -235,6 +241,7 @@ export const AIAssistant = () => {
               </div>
             </div>
           ))}
+          <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
 

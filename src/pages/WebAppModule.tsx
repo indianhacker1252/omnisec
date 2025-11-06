@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Globe, Loader2, Shield, AlertTriangle, CheckCircle, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { ReportGenerator } from "@/components/ReportGenerator";
 
 interface VulnerabilityFinding {
   severity: "critical" | "high" | "medium" | "low" | "info";
@@ -141,17 +142,34 @@ const WebAppModule = () => {
 
         {findings.length > 0 && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-semibold font-mono">
                 Findings ({findings.length})
               </h2>
-              <div className="flex gap-2">
-                <Badge variant="destructive">
-                  {findings.filter(f => f.severity === "critical" || f.severity === "high").length} High Risk
-                </Badge>
-                <Badge variant="secondary">
-                  {findings.filter(f => f.severity === "medium" || f.severity === "low").length} Medium/Low
-                </Badge>
+              <div className="flex items-center gap-3">
+                <div className="flex gap-2">
+                  <Badge variant="destructive">
+                    {findings.filter(f => f.severity === "critical" || f.severity === "high").length} High Risk
+                  </Badge>
+                  <Badge variant="secondary">
+                    {findings.filter(f => f.severity === "medium" || f.severity === "low").length} Medium/Low
+                  </Badge>
+                </div>
+                <ReportGenerator
+                  data={{
+                    target,
+                    scanType: "Web Application Security Scan",
+                    timestamp: new Date().toISOString(),
+                    findings,
+                    summary: {
+                      total: findings.length,
+                      critical: findings.filter(f => f.severity === "critical").length,
+                      high: findings.filter(f => f.severity === "high").length,
+                      medium: findings.filter(f => f.severity === "medium").length,
+                      low: findings.filter(f => f.severity === "low").length,
+                    }
+                  }}
+                />
               </div>
             </div>
 

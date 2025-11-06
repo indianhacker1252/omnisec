@@ -2,6 +2,7 @@ import { CommandHeader } from "@/components/CommandHeader";
 import { ModuleCard } from "@/components/ModuleCard";
 import { SystemStatus } from "@/components/SystemStatus";
 import { AIAssistant } from "@/components/AIAssistant";
+import { VoiceAssistant } from "@/components/VoiceAssistant";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -123,12 +124,13 @@ const Dashboard = () => {
       <CommandHeader />
 
       <main className="container mx-auto px-6 py-8">
-        {/* Top Section - System Status & AI Assistant */}
+        {/* Top Section - Voice & AI Assistant + System Status */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-          <div className="lg:col-span-1">
+          <div className="lg:col-span-1 space-y-6">
+            <VoiceAssistant />
             <SystemStatus />
           </div>
-          <div className="lg:col-span-2 h-[400px]">
+          <div className="lg:col-span-2 h-[500px]">
             <AIAssistant />
           </div>
         </div>

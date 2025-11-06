@@ -29,3 +29,6 @@ verify_jwt = true
 
 [functions.zap-scanner]
 verify_jwt = true
+
+[functions.voice-assistant]
+verify_jwt = false
