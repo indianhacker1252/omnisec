@@ -1,34 +1,37 @@
 project_id = "pavwekamqfnymbwujyld"
 
 [functions.chat]
-verify_jwt = true
+verify_jwt = false
 
 [functions.recon]
-verify_jwt = true
+verify_jwt = false
 
 [functions.vulnintel]
-verify_jwt = true
+verify_jwt = false
 
 [functions.status]
-verify_jwt = true
+verify_jwt = false
 
 [functions.vapt-assistant]
-verify_jwt = true
+verify_jwt = false
 
 [functions.webapp-scan]
-verify_jwt = true
+verify_jwt = false
 
 [functions.wireless-scan]
-verify_jwt = true
+verify_jwt = false
 
 [functions.payload-generator]
-verify_jwt = true
+verify_jwt = false
 
 [functions.autonomous-attack]
-verify_jwt = true
+verify_jwt = false
 
 [functions.zap-scanner]
-verify_jwt = true
+verify_jwt = false
 
 [functions.voice-assistant]
+verify_jwt = false
+
+[functions.llm-redteam]
 verify_jwt = false

@@ -20,6 +20,7 @@ import EthicsModule from "./pages/EthicsModule";
 import MalwareDevModule from "./pages/MalwareDevModule";
 import KaliIntegration from "./pages/KaliIntegration";
 import AutonomousAttack from "./pages/AutonomousAttack";
+import LLMRedTeam from "./pages/LLMRedTeam";
 import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
@@ -185,6 +186,14 @@ const App = () => (
             element={
               <ProtectedRoute>
                 <Settings />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/llm-redteam"
+            element={
+              <ProtectedRoute>
+                <LLMRedTeam />
               </ProtectedRoute>
             }
           />

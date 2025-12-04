@@ -3,6 +3,7 @@ import { ModuleCard } from "@/components/ModuleCard";
 import { SystemStatus } from "@/components/SystemStatus";
 import { AIAssistant } from "@/components/AIAssistant";
 import { VoiceAssistant } from "@/components/VoiceAssistant";
+import { PerformanceDashboard } from "@/components/PerformanceDashboard";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -19,6 +20,7 @@ import {
   Terminal,
   Skull,
   Zap,
+  Bot,
 } from "lucide-react";
 
 const Dashboard = () => {
@@ -90,6 +92,13 @@ const Dashboard = () => {
       path: "/aithreat",
     },
     {
+      title: "LLM Red Teaming",
+      description: "DeepTeam-inspired AI security vulnerability testing",
+      icon: Bot,
+      status: "active" as const,
+      path: "/llm-redteam",
+    },
+    {
       title: "Ethics & Governance",
       description: "Compliance auditing, audit logs, and responsible disclosure",
       icon: Scale,
@@ -133,6 +142,11 @@ const Dashboard = () => {
           <div className="lg:col-span-2 h-[500px]">
             <AIAssistant />
           </div>
+        </div>
+
+        {/* Performance Dashboard */}
+        <div className="mb-8">
+          <PerformanceDashboard />
         </div>
 
         {/* Modules Grid */}
