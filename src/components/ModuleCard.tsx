@@ -22,7 +22,7 @@ export const ModuleCard = ({
 }: ModuleCardProps) => {
   const statusColors = {
     active: "border-cyber-cyan shadow-[0_0_15px_rgba(0,255,255,0.3)]",
-    idle: "border-border hover:border-cyber-purple/50",
+    idle: "border-cyber-purple/30 hover:border-cyber-purple/50",
     alert: "border-cyber-red shadow-[0_0_15px_rgba(255,0,0,0.3)]",
   };
 
