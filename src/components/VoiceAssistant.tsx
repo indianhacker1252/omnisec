@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Mic, MicOff, Phone, PhoneOff } from "lucide-react";
+import { Mic, Phone, PhoneOff, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { AudioRecorder, encodeAudioForAPI, playAudioData } from "@/utils/VoiceAssistant";
 
@@ -9,6 +9,7 @@ export const VoiceAssistant = () => {
   const { toast } = useToast();
   const [isConnected, setIsConnected] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
   const [transcript, setTranscript] = useState<string[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -16,15 +17,62 @@ export const VoiceAssistant = () => {
 
   const PROJECT_REF = import.meta.env.VITE_SUPABASE_URL?.split('//')[1]?.split('.')[0];
 
-  const startVoiceChat = async () => {
-    try {
-      // Request microphone permission
-      await navigator.mediaDevices.getUserMedia({ audio: true });
+  // Check if voice assistant is configured
+  useEffect(() => {
+    const checkConfig = async () => {
+      try {
+        const wsUrl = `wss://${PROJECT_REF}.supabase.co/functions/v1/voice-assistant`;
+        const testWs = new WebSocket(wsUrl);
+        
+        testWs.onopen = () => {
+          // Connection succeeded, but we'll get a close message if API key is missing
+        };
+        
+        testWs.onclose = (event) => {
+          if (event.code === 1008) {
+            // API key not configured
+            setIsConfigured(false);
+          } else if (event.code !== 1000) {
+            setIsConfigured(false);
+          }
+          testWs.close();
+        };
+        
+        testWs.onerror = () => {
+          setIsConfigured(false);
+        };
+        
+        // If we don't get a close within 2 seconds, assume it's working
+        setTimeout(() => {
+          if (isConfigured === null) {
+            setIsConfigured(true);
+          }
+          if (testWs.readyState === WebSocket.OPEN) {
+            testWs.close();
+          }
+        }, 2000);
+      } catch {
+        setIsConfigured(false);
+      }
+    };
+    
+    checkConfig();
+  }, [PROJECT_REF]);
 
-      // Initialize audio context
+  const startVoiceChat = async () => {
+    if (!isConfigured) {
+      toast({
+        title: "Voice Assistant Not Configured",
+        description: "OpenAI API key is required. Please configure it in project secrets.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
       audioContextRef.current = new AudioContext({ sampleRate: 24000 });
 
-      // Connect to WebSocket
       const wsUrl = `wss://${PROJECT_REF}.supabase.co/functions/v1/voice-assistant`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -44,7 +92,6 @@ export const VoiceAssistant = () => {
           console.log('Received:', data.type);
 
           if (data.type === 'session.created') {
-            // Send session configuration
             ws.send(JSON.stringify({
               type: 'session.update',
               session: {
@@ -73,7 +120,6 @@ Provide concise, actionable security advice. When asked about scanning or attack
               }
             }));
 
-            // Start recording
             recorderRef.current = new AudioRecorder((audioData) => {
               if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
@@ -118,8 +164,7 @@ Provide concise, actionable security advice. When asked about scanning or attack
         }
       };
 
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
+      ws.onerror = () => {
         toast({
           title: "Connection Error",
           description: "Failed to connect to voice assistant",
@@ -128,7 +173,6 @@ Provide concise, actionable security advice. When asked about scanning or attack
       };
 
       ws.onclose = () => {
-        console.log('Voice assistant disconnected');
         setIsConnected(false);
         setIsSpeaking(false);
       };
@@ -157,6 +201,27 @@ Provide concise, actionable security advice. When asked about scanning or attack
     };
   }, []);
 
+  // Show configuration required message
+  if (isConfigured === false) {
+    return (
+      <Card className="p-6 bg-card/50 backdrop-blur-sm border-cyber-purple/30">
+        <div className="flex items-center gap-2 mb-4">
+          <Phone className="h-5 w-5 text-cyber-purple" />
+          <h3 className="font-semibold font-mono">Voice Assistant</h3>
+        </div>
+        <div className="flex items-center gap-3 p-4 bg-warning/10 border border-warning/30 rounded-lg">
+          <AlertCircle className="h-5 w-5 text-warning flex-shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-warning">Configuration Required</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Add OPENAI_API_KEY in project secrets to enable voice assistant
+            </p>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
   return (
     <Card className="p-6 bg-card/50 backdrop-blur-sm border-cyber-purple/30">
       <div className="flex items-center justify-between mb-4">
@@ -177,9 +242,13 @@ Provide concise, actionable security advice. When asked about scanning or attack
             Disconnect
           </Button>
         ) : (
-          <Button onClick={startVoiceChat} className="gap-2 bg-cyber-purple hover:bg-cyber-purple/80">
+          <Button 
+            onClick={startVoiceChat} 
+            className="gap-2 bg-cyber-purple hover:bg-cyber-purple/80"
+            disabled={isConfigured === null}
+          >
             <Mic className="h-4 w-4" />
-            Start Voice Chat
+            {isConfigured === null ? "Checking..." : "Start Voice Chat"}
           </Button>
         )}
       </div>
