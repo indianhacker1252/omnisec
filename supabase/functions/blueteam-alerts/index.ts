@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import "https://deno.land/x/xhr@0.1.0/mod.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -12,95 +12,110 @@ serve(async (req) => {
   }
 
   try {
-    const { action } = await req.json();
+    // Initialize Supabase client
+    const supabaseClient = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
+    );
 
-    // Real-time threat detection simulation using AI analysis
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          {
-            role: "system",
-            content: `You are a Blue Team security analyst AI. Generate realistic security alerts based on MITRE ATT&CK framework.
-
-Return JSON array of 3-5 security alerts with this exact structure:
-[
-  {
-    "id": "unique_id",
-    "severity": "critical|high|medium|low",
-    "technique": "MITRE ATT&CK technique ID and name",
-    "description": "Brief description of the alert",
-    "source": "Source system (Email Gateway, IAM, Network Monitor, EDR, Firewall, etc.)",
-    "timestamp": "ISO timestamp",
-    "ioc": "Indicator of compromise if applicable"
-  }
-]
-
-Make alerts realistic and varied. Include different attack stages.`
-          },
-          {
-            role: "user",
-            content: action === "refresh" 
-              ? "Generate new set of current security alerts for the SOC dashboard"
-              : "Generate initial security alerts showing recent detections"
-          }
-        ],
-        temperature: 0.7
-      })
-    });
-
-    const aiResult = await response.json();
-    const content = aiResult.choices?.[0]?.message?.content || "[]";
-    
-    // Parse JSON from response
-    let alerts;
-    try {
-      const jsonMatch = content.match(/\[[\s\S]*\]/);
-      alerts = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
-    } catch {
-      alerts = [];
+    // Authenticate user
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
     }
 
-    // Generate real metrics based on alerts
-    const criticalCount = alerts.filter((a: any) => a.severity === "critical").length;
-    const highCount = alerts.filter((a: any) => a.severity === "high").length;
-    
-    const metrics = {
-      activeAlerts: alerts.length + Math.floor(Math.random() * 20),
-      threatsBlocked: 1200 + Math.floor(Math.random() * 200),
-      socEfficiency: 90 + Math.floor(Math.random() * 8),
-      mttr: 10 + Math.floor(Math.random() * 5),
-      criticalAlerts: criticalCount,
-      highAlerts: highCount
-    };
+    const { action, siemEndpoint, apiKey } = await req.json();
 
-    // Generate MITRE coverage data
-    const mitreCoverage = {
-      "Initial Access": 75 + Math.floor(Math.random() * 20),
-      "Execution": 80 + Math.floor(Math.random() * 15),
-      "Persistence": 70 + Math.floor(Math.random() * 25),
-      "Privilege Escalation": 65 + Math.floor(Math.random() * 30),
-      "Defense Evasion": 60 + Math.floor(Math.random() * 25),
-      "Credential Access": 85 + Math.floor(Math.random() * 10),
-      "Discovery": 90 + Math.floor(Math.random() * 8),
-      "Lateral Movement": 55 + Math.floor(Math.random() * 30),
-      "Collection": 70 + Math.floor(Math.random() * 20),
-      "Exfiltration": 80 + Math.floor(Math.random() * 15)
-    };
+    // Check if user provided SIEM integration details
+    if (siemEndpoint && apiKey) {
+      // Real SIEM integration - fetch actual alerts
+      try {
+        const siemResponse = await fetch(siemEndpoint, {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json"
+          }
+        });
 
+        if (!siemResponse.ok) {
+          throw new Error(`SIEM returned ${siemResponse.status}`);
+        }
+
+        const siemData = await siemResponse.json();
+
+        // Audit log
+        await supabaseClient.from("security_audit_log").insert({
+          user_id: user.id,
+          action: "siem_alerts_fetched",
+          module: "blue_team",
+          target: siemEndpoint,
+          result: `Fetched ${siemData.alerts?.length || 0} alerts`
+        });
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            source: "SIEM",
+            alerts: siemData.alerts || [],
+            metrics: siemData.metrics || {},
+            mitreCoverage: siemData.mitreCoverage || {},
+            timestamp: new Date().toISOString()
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } catch (siemError) {
+        console.error("SIEM connection failed:", siemError);
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "SIEM_CONNECTION_FAILED",
+            message: siemError instanceof Error ? siemError.message : "Failed to connect to SIEM"
+          }),
+          { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
+    // No SIEM configured - return configuration required message
     return new Response(
       JSON.stringify({
-        success: true,
-        alerts,
-        metrics,
-        mitreCoverage,
+        success: false,
+        error: "SIEM_NOT_CONFIGURED",
+        message: "Blue Team module requires SIEM integration for real alerts",
+        instructions: {
+          title: "Configure SIEM Integration",
+          description: "To receive real security alerts, connect your SIEM/log management platform",
+          supportedPlatforms: [
+            { name: "Splunk", endpoint: "https://your-splunk:8089/services/search/jobs" },
+            { name: "Elastic SIEM", endpoint: "https://your-elastic:9200/_security/alerts" },
+            { name: "Microsoft Sentinel", endpoint: "https://management.azure.com/subscriptions/.../alerts" },
+            { name: "IBM QRadar", endpoint: "https://your-qradar/api/siem/offenses" },
+            { name: "Wazuh", endpoint: "https://your-wazuh:55000/security/alerts" },
+            { name: "TheHive", endpoint: "https://your-hive:9000/api/alert" }
+          ],
+          steps: [
+            "1. Generate an API key/token in your SIEM platform",
+            "2. Configure the endpoint URL for your SIEM's alerts API",
+            "3. Add SIEM credentials in OmniSec Settings > Integrations",
+            "4. Alerts will be fetched in real-time from your SIEM"
+          ]
+        },
+        alternatives: [
+          "Use local log analysis tools (OSSEC, Wazuh agent)",
+          "Configure syslog forwarding to analyze logs",
+          "Deploy OmniSec agent on endpoints for EDR functionality"
+        ],
         timestamp: new Date().toISOString()
       }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { 
+        status: 400, 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      }
     );
   } catch (error: unknown) {
     console.error("Blue Team error:", error);
