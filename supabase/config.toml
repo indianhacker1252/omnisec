@@ -35,3 +35,9 @@ verify_jwt = false
 
 [functions.llm-redteam]
 verify_jwt = false
+
+[functions.blueteam-alerts]
+verify_jwt = false
+
+[functions.forensics-analyze]
+verify_jwt = false
