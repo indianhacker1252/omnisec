@@ -41,3 +41,6 @@ verify_jwt = false
 
 [functions.forensics-analyze]
 verify_jwt = false
+
+[functions.vapt-learning]
+verify_jwt = false
