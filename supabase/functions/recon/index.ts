@@ -1,5 +1,4 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -11,9 +10,16 @@ const corsHeaders = {
 type ReconResult = {
   host: string;
   ip: string;
-  status: "online" | "offline";
+  status: "online" | "offline" | "unknown";
   ports: { port: number; transport?: string; product?: string; service?: string }[];
+  hostnames?: string[];
+  org?: string;
+  isp?: string;
+  asn?: string;
+  country?: string;
+  city?: string;
   timestamp: string;
+  source: string;
 };
 
 function validateTarget(target: string): boolean {
@@ -50,85 +56,176 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    // Initialize Supabase client
-    const supabaseClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
-    );
-
-    // Authenticate user (recon is available to all authenticated users)
-    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
+    const { target } = await req.json();
+    if (!target || typeof target !== "string") {
+      return new Response(JSON.stringify({ error: "Missing target parameter" }), { 
+        status: 400, 
+        headers: { ...corsHeaders, "Content-Type": "application/json" } 
       });
     }
 
-    const { target } = await req.json();
-    if (!target || typeof target !== "string") {
-      return new Response(JSON.stringify({ error: "Invalid request" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
+    // Clean target
+    const cleanTarget = target.trim().replace(/^https?:\/\//, '').split('/')[0];
 
-    if (!validateTarget(target)) {
-      return new Response(JSON.stringify({ error: "Invalid target address" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-
-    const SHODAN_API_KEY = Deno.env.get("SHODAN_API_KEY");
-    if (!SHODAN_API_KEY) {
-      return new Response(JSON.stringify({ error: "Service not configured" }), { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    if (!validateTarget(cleanTarget)) {
+      return new Response(JSON.stringify({ error: "Invalid target - private/internal addresses not allowed" }), { 
+        status: 400, 
+        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+      });
     }
 
     // If target is IP keep it, else resolve
     const ipRegex = /^(?:\d{1,3}\.){3}\d{1,3}$/;
-    const ip = ipRegex.test(target) ? target : (await resolveARecord(target));
+    const ip = ipRegex.test(cleanTarget) ? cleanTarget : (await resolveARecord(cleanTarget));
+    
     if (!ip) {
-      return new Response(JSON.stringify({ error: "Invalid target" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ 
+        error: "Could not resolve hostname to IP address",
+        host: cleanTarget 
+      }), { 
+        status: 400, 
+        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+      });
     }
 
     if (!validateTarget(ip)) {
-      return new Response(JSON.stringify({ error: "Invalid target address" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: "Resolved IP is a private/internal address" }), { 
+        status: 400, 
+        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+      });
     }
 
-    const shodanResp = await fetch(`https://api.shodan.io/shodan/host/${ip}?key=${SHODAN_API_KEY}`);
-    if (!shodanResp.ok) {
-      console.error("shodan error", shodanResp.status);
-      return new Response(JSON.stringify({ error: "External service error" }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    console.log(`Performing recon on: ${cleanTarget} (IP: ${ip})`);
+
+    const SHODAN_API_KEY = Deno.env.get("SHODAN_API_KEY");
+    
+    if (!SHODAN_API_KEY) {
+      // Fallback: Basic DNS and HTTP check without Shodan
+      console.log("No Shodan API key - performing basic recon");
+      
+      const basicResult: ReconResult = {
+        host: cleanTarget,
+        ip: ip,
+        status: "unknown",
+        ports: [],
+        timestamp: new Date().toISOString(),
+        source: "DNS Resolution (Shodan API key not configured)"
+      };
+
+      // Try to get more info from IP-API (free)
+      try {
+        const ipApiResp = await fetch(`http://ip-api.com/json/${ip}?fields=status,country,city,isp,org,as`);
+        if (ipApiResp.ok) {
+          const ipData = await ipApiResp.json();
+          if (ipData.status === "success") {
+            basicResult.country = ipData.country;
+            basicResult.city = ipData.city;
+            basicResult.isp = ipData.isp;
+            basicResult.org = ipData.org;
+            basicResult.asn = ipData.as;
+            basicResult.status = "online";
+          }
+        }
+      } catch (e) {
+        console.error("IP-API error:", e);
+      }
+
+      // Check common ports via HTTP
+      const commonPorts = [80, 443, 8080, 8443];
+      for (const port of commonPorts) {
+        try {
+          const protocol = port === 443 || port === 8443 ? 'https' : 'http';
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3000);
+          
+          const resp = await fetch(`${protocol}://${ip}:${port}`, {
+            method: 'HEAD',
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          
+          basicResult.ports.push({
+            port: port,
+            service: protocol,
+            product: resp.headers.get('server') || undefined
+          });
+          basicResult.status = "online";
+        } catch (e) {
+          // Port not accessible
+        }
+      }
+
+      return new Response(JSON.stringify(basicResult), { 
+        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+      });
     }
+
+    // Use Shodan API
+    const shodanResp = await fetch(`https://api.shodan.io/shodan/host/${ip}?key=${SHODAN_API_KEY}`);
+    
+    if (!shodanResp.ok) {
+      const errorText = await shodanResp.text();
+      console.error("Shodan error:", shodanResp.status, errorText);
+      
+      if (shodanResp.status === 404) {
+        return new Response(JSON.stringify({ 
+          host: cleanTarget,
+          ip: ip,
+          status: "online",
+          ports: [],
+          message: "No Shodan data available for this IP. The host may not have been recently scanned by Shodan.",
+          timestamp: new Date().toISOString(),
+          source: "Shodan API"
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      
+      return new Response(JSON.stringify({ 
+        error: "Shodan API error", 
+        details: errorText.substring(0, 200) 
+      }), { 
+        status: 502, 
+        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+      });
+    }
+    
     const shodan = await shodanResp.json();
 
     const ports = Array.isArray(shodan?.data)
-      ? shodan.data.map((d: any) => ({ port: d.port, transport: d.transport, product: d.product, service: d._shodan?.module || d.product }))
+      ? shodan.data.map((d: any) => ({ 
+          port: d.port, 
+          transport: d.transport, 
+          product: d.product, 
+          service: d._shodan?.module || d.product,
+          version: d.version,
+          banner: d.data?.substring(0, 200)
+        }))
       : (Array.isArray(shodan?.ports) ? shodan.ports.map((p: number) => ({ port: p })) : []);
 
     const result: ReconResult = {
-      host: target,
+      host: cleanTarget,
       ip,
       status: "online",
       ports: ports.filter((p: any) => typeof p.port === "number"),
+      hostnames: shodan.hostnames || [],
+      org: shodan.org,
+      isp: shodan.isp,
+      asn: shodan.asn,
+      country: shodan.country_name,
+      city: shodan.city,
       timestamp: new Date().toISOString(),
+      source: "Shodan API"
     };
 
-    // Audit log
-    await supabaseClient.from("security_audit_log").insert({
-      user_id: user.id,
-      action: "reconnaissance_completed",
-      resource_type: "network_target",
-      resource_id: target,
-      details: {
-        target: target,
-        ip: ip,
-        ports_found: result.ports.length,
-        ports: result.ports.map((p: any) => p.port),
-        timestamp: new Date().toISOString()
-      },
-      ip_address: req.headers.get("x-forwarded-for") || req.headers.get("cf-connecting-ip") || "unknown"
-    });
+    console.log(`Recon complete: Found ${result.ports.length} ports`);
 
-    return new Response(JSON.stringify(result), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    return new Response(JSON.stringify(result), { 
+      headers: { ...corsHeaders, "Content-Type": "application/json" } 
+    });
   } catch (e) {
     console.error("recon error", e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), { 
+      status: 500, 
+      headers: { ...corsHeaders, "Content-Type": "application/json" } 
+    });
   }
 });

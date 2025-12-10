@@ -1,5 +1,4 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -12,25 +11,12 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    // Initialize Supabase client
-    const supabaseClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
-    );
-
-    // Authenticate user (CVE intel available to all authenticated users)
-    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
-      });
-    }
-
     const { query } = await req.json();
     if (!query || typeof query !== "string") {
-      return new Response(JSON.stringify({ error: "Missing query" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: "Missing query parameter" }), { 
+        status: 400, 
+        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+      });
     }
 
     // Input validation
@@ -41,19 +27,32 @@ serve(async (req) => {
       });
     }
 
+    console.log("Searching NVD for:", query);
+
     const NVD_API_KEY = Deno.env.get("NVD_API_KEY");
     const url = new URL("https://services.nvd.nist.gov/rest/json/cves/2.0");
     url.searchParams.set("keywordSearch", query);
     url.searchParams.set("resultsPerPage", "20");
 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (NVD_API_KEY) headers["apiKey"] = NVD_API_KEY;
+    if (NVD_API_KEY) {
+      headers["apiKey"] = NVD_API_KEY;
+      console.log("Using NVD API key for enhanced rate limits");
+    } else {
+      console.log("No NVD API key - using public rate limits (may be slower)");
+    }
 
     const r = await fetch(url.toString(), { headers });
     if (!r.ok) {
       const t = await r.text();
       console.error("NVD error", r.status, t);
-      return new Response(JSON.stringify({ error: "NVD API error", details: t }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ 
+        error: "NVD API error", 
+        details: `Status ${r.status}: ${t.substring(0, 200)}` 
+      }), { 
+        status: 502, 
+        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+      });
     }
     const data = await r.json();
 
@@ -82,21 +81,15 @@ serve(async (req) => {
       };
     });
 
-    // Audit log
-    await supabaseClient.from("security_audit_log").insert({
-      user_id: user.id,
-      action: "cve_search_completed",
-      resource_type: "vulnerability_intelligence",
-      resource_id: query,
-      details: {
-        query: query,
-        results_count: vulns.length,
-        timestamp: new Date().toISOString()
-      },
-      ip_address: req.headers.get("x-forwarded-for") || req.headers.get("cf-connecting-ip") || "unknown"
-    });
+    console.log(`Found ${vulns.length} vulnerabilities for query: ${query}`);
 
-    return new Response(JSON.stringify({ count: vulns.length, vulnerabilities: vulns }), {
+    return new Response(JSON.stringify({ 
+      count: vulns.length, 
+      vulnerabilities: vulns,
+      source: "NVD (National Vulnerability Database)",
+      query: query,
+      timestamp: new Date().toISOString()
+    }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Send, Sparkles } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -100,11 +99,13 @@ export const AIAssistant = () => {
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive - scroll within container only
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    }
   }, [messages]);
 
   const handleSend = async () => {
@@ -123,7 +124,6 @@ export const AIAssistant = () => {
     ];
     
     let metadata: Message['metadata'] = undefined;
-    let autoExecute = false;
     
     for (const pattern of commandPatterns) {
       const match = input.match(pattern.regex);
@@ -133,7 +133,6 @@ export const AIAssistant = () => {
           target: match[1].trim(),
           action: pattern.action
         };
-        autoExecute = true;
         
         // Auto-execute the command
         const executionMsg: Message = {
@@ -217,13 +216,16 @@ export const AIAssistant = () => {
   };
 
   return (
-    <Card className="h-full flex flex-col bg-card/50 backdrop-blur-sm border-cyber-purple/30">
-      <div className="p-4 border-b border-border/50 flex items-center gap-2">
+    <Card className="h-full flex flex-col bg-card/50 backdrop-blur-sm border-cyber-purple/30 overflow-hidden">
+      <div className="p-4 border-b border-border/50 flex items-center gap-2 flex-shrink-0">
         <Sparkles className="h-5 w-5 text-cyber-purple" />
         <h3 className="font-semibold font-mono">AI Control Interface</h3>
       </div>
 
-      <ScrollArea className="flex-1 p-4">
+      <div 
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto p-4"
+      >
         <div className="space-y-4">
           {messages.map((message, i) => (
             <div
@@ -241,11 +243,10 @@ export const AIAssistant = () => {
               </div>
             </div>
           ))}
-          <div ref={messagesEndRef} />
         </div>
-      </ScrollArea>
+      </div>
 
-      <div className="p-4 border-t border-border/50">
+      <div className="p-4 border-t border-border/50 flex-shrink-0">
         <div className="flex gap-2">
           <Input
             value={input}
