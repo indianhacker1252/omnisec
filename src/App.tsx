@@ -21,6 +21,7 @@ import MalwareDevModule from "./pages/MalwareDevModule";
 import KaliIntegration from "./pages/KaliIntegration";
 import AutonomousAttack from "./pages/AutonomousAttack";
 import LLMRedTeam from "./pages/LLMRedTeam";
+import LearningVaptAssistant from "./pages/LearningVaptAssistant";
 import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
@@ -194,6 +195,14 @@ const App = () => (
             element={
               <ProtectedRoute>
                 <LLMRedTeam />
+            </ProtectedRoute>
+          }
+          />
+          <Route
+            path="/vapt-learning"
+            element={
+              <ProtectedRoute>
+                <LearningVaptAssistant />
               </ProtectedRoute>
             }
           />
