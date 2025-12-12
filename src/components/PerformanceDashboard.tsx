@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { 
   Activity, 
   Cpu, 
@@ -10,71 +11,183 @@ import {
   Clock,
   TrendingUp,
   Zap,
-  Brain
+  Brain,
+  Bell,
+  X,
+  CheckCircle2,
+  AlertTriangle,
+  AlertCircle
 } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
-interface PerformanceMetrics {
-  cpu: number;
-  memory: number;
-  network: number;
-  latency: number;
-  aiLearningProgress: number;
-  scansCompleted: number;
-  vulnerabilitiesFound: number;
-  accuracy: number;
+interface Alert {
+  id: string;
+  type: string;
+  severity: string;
+  title: string;
+  description: string;
+  source_module: string;
+  is_read: boolean;
+  is_cleared: boolean;
+  created_at: string;
 }
 
-interface ScanHistory {
-  timestamp: string;
-  type: string;
-  duration: number;
-  findings: number;
+interface ScanHistoryItem {
+  id: string;
+  module: string;
+  scan_type: string;
+  target: string;
+  status: string;
+  duration_ms: number;
+  findings_count: number;
+  created_at: string;
 }
 
 export const PerformanceDashboard = () => {
-  const [metrics, setMetrics] = useState<PerformanceMetrics>({
-    cpu: 35,
-    memory: 48,
-    network: 85,
-    latency: 45,
-    aiLearningProgress: 72,
-    scansCompleted: 156,
-    vulnerabilitiesFound: 423,
-    accuracy: 94.5
+  const { toast } = useToast();
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [scanHistory, setScanHistory] = useState<ScanHistoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isLive, setIsLive] = useState(true);
+  const [stats, setStats] = useState({
+    totalScans: 0,
+    totalFindings: 0,
+    activeAlerts: 0
   });
 
-  const [scanHistory, setScanHistory] = useState<ScanHistory[]>([
-    { timestamp: "2024-01-15 14:32", type: "Web Scan", duration: 245, findings: 12 },
-    { timestamp: "2024-01-15 13:15", type: "Network Recon", duration: 180, findings: 8 },
-    { timestamp: "2024-01-15 11:45", type: "Vuln Assessment", duration: 320, findings: 15 },
-    { timestamp: "2024-01-15 10:20", type: "Port Scan", duration: 95, findings: 24 },
-    { timestamp: "2024-01-15 09:00", type: "LLM Red Team", duration: 420, findings: 6 }
-  ]);
+  // Fetch alerts and scan history
+  const fetchData = async () => {
+    try {
+      // Fetch active alerts (not cleared)
+      const { data: alertsData, error: alertsError } = await supabase
+        .from('security_alerts')
+        .select('*')
+        .eq('is_cleared', false)
+        .order('created_at', { ascending: false })
+        .limit(10);
 
-  const [isLive, setIsLive] = useState(true);
+      if (alertsError) {
+        console.error('Error fetching alerts:', alertsError);
+      } else {
+        setAlerts(alertsData || []);
+      }
 
-  // Simulate live metrics updates
+      // Fetch recent scan history
+      const { data: historyData, error: historyError } = await supabase
+        .from('scan_history')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      if (historyError) {
+        console.error('Error fetching history:', historyError);
+      } else {
+        setScanHistory(historyData || []);
+      }
+
+      // Calculate stats
+      const { count: totalScans } = await supabase
+        .from('scan_history')
+        .select('*', { count: 'exact', head: true });
+
+      const { data: findingsData } = await supabase
+        .from('scan_history')
+        .select('findings_count');
+
+      const totalFindings = findingsData?.reduce((sum, item) => sum + (item.findings_count || 0), 0) || 0;
+
+      setStats({
+        totalScans: totalScans || 0,
+        totalFindings,
+        activeAlerts: (alertsData || []).length
+      });
+
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (!isLive) return;
-    
-    const interval = setInterval(() => {
-      setMetrics(prev => ({
-        ...prev,
-        cpu: Math.max(10, Math.min(95, prev.cpu + (Math.random() - 0.5) * 10)),
-        memory: Math.max(20, Math.min(90, prev.memory + (Math.random() - 0.5) * 5)),
-        network: Math.max(50, Math.min(100, prev.network + (Math.random() - 0.5) * 8)),
-        latency: Math.max(20, Math.min(200, prev.latency + (Math.random() - 0.5) * 20)),
-        aiLearningProgress: Math.min(100, prev.aiLearningProgress + Math.random() * 0.1)
-      }));
-    }, 2000);
+    fetchData();
 
-    return () => clearInterval(interval);
+    // Subscribe to realtime updates
+    const alertsChannel = supabase
+      .channel('alerts-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'security_alerts' }, () => {
+        fetchData();
+      })
+      .subscribe();
+
+    const historyChannel = supabase
+      .channel('history-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'scan_history' }, () => {
+        fetchData();
+      })
+      .subscribe();
+
+    // Refresh interval if live
+    const interval = isLive ? setInterval(fetchData, 30000) : null;
+
+    return () => {
+      alertsChannel.unsubscribe();
+      historyChannel.unsubscribe();
+      if (interval) clearInterval(interval);
+    };
   }, [isLive]);
 
-  const getStatusColor = (value: number, thresholds: { low: number; high: number }) => {
-    if (value < thresholds.low) return "text-green-500";
-    if (value < thresholds.high) return "text-yellow-500";
-    return "text-red-500";
+  const clearAlert = async (alertId: string) => {
+    try {
+      const { error } = await supabase
+        .from('security_alerts')
+        .update({ is_cleared: true, cleared_at: new Date().toISOString() })
+        .eq('id', alertId);
+
+      if (error) throw error;
+
+      setAlerts(prev => prev.filter(a => a.id !== alertId));
+      toast({ title: "Alert cleared" });
+    } catch (error) {
+      console.error('Error clearing alert:', error);
+      toast({ title: "Failed to clear alert", variant: "destructive" });
+    }
+  };
+
+  const clearAllAlerts = async () => {
+    try {
+      const { error } = await supabase
+        .from('security_alerts')
+        .update({ is_cleared: true, cleared_at: new Date().toISOString() })
+        .eq('is_cleared', false);
+
+      if (error) throw error;
+
+      setAlerts([]);
+      toast({ title: "All alerts cleared" });
+    } catch (error) {
+      console.error('Error clearing alerts:', error);
+      toast({ title: "Failed to clear alerts", variant: "destructive" });
+    }
+  };
+
+  const getSeverityIcon = (severity: string) => {
+    switch (severity) {
+      case 'critical': return <AlertCircle className="h-4 w-4 text-red-500" />;
+      case 'high': return <AlertTriangle className="h-4 w-4 text-orange-500" />;
+      case 'medium': return <AlertTriangle className="h-4 w-4 text-yellow-500" />;
+      default: return <CheckCircle2 className="h-4 w-4 text-blue-500" />;
+    }
+  };
+
+  const getSeverityColor = (severity: string) => {
+    switch (severity) {
+      case 'critical': return 'bg-red-500/20 text-red-400 border-red-500/50';
+      case 'high': return 'bg-orange-500/20 text-orange-400 border-orange-500/50';
+      case 'medium': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50';
+      default: return 'bg-blue-500/20 text-blue-400 border-blue-500/50';
+    }
   };
 
   return (
@@ -87,52 +200,44 @@ export const PerformanceDashboard = () => {
         </div>
         <Badge 
           variant={isLive ? "default" : "secondary"}
-          className={isLive ? "bg-green-500 animate-pulse" : ""}
+          className={isLive ? "bg-green-500 animate-pulse cursor-pointer" : "cursor-pointer"}
           onClick={() => setIsLive(!isLive)}
-          style={{ cursor: "pointer" }}
         >
           {isLive ? "● LIVE" : "○ PAUSED"}
         </Badge>
       </div>
 
-      {/* System Metrics */}
+      {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card className="bg-card/50 backdrop-blur-sm border-cyber-purple/30">
           <CardContent className="pt-4">
             <div className="flex items-center justify-between mb-2">
-              <Cpu className="h-4 w-4 text-muted-foreground" />
-              <span className={`text-xl font-bold ${getStatusColor(metrics.cpu, { low: 50, high: 80 })}`}>
-                {metrics.cpu.toFixed(0)}%
-              </span>
+              <Zap className="h-4 w-4 text-muted-foreground" />
+              <span className="text-xl font-bold text-cyber-cyan">{stats.totalScans}</span>
             </div>
-            <Progress value={metrics.cpu} className="h-1.5" />
-            <p className="text-xs text-muted-foreground mt-1">CPU Usage</p>
+            <p className="text-xs text-muted-foreground">Total Scans</p>
           </CardContent>
         </Card>
 
         <Card className="bg-card/50 backdrop-blur-sm border-cyber-purple/30">
           <CardContent className="pt-4">
             <div className="flex items-center justify-between mb-2">
-              <HardDrive className="h-4 w-4 text-muted-foreground" />
-              <span className={`text-xl font-bold ${getStatusColor(metrics.memory, { low: 60, high: 85 })}`}>
-                {metrics.memory.toFixed(0)}%
-              </span>
+              <Brain className="h-4 w-4 text-muted-foreground" />
+              <span className="text-xl font-bold text-cyber-purple">{stats.totalFindings}</span>
             </div>
-            <Progress value={metrics.memory} className="h-1.5" />
-            <p className="text-xs text-muted-foreground mt-1">Memory</p>
+            <p className="text-xs text-muted-foreground">Total Findings</p>
           </CardContent>
         </Card>
 
         <Card className="bg-card/50 backdrop-blur-sm border-cyber-purple/30">
           <CardContent className="pt-4">
             <div className="flex items-center justify-between mb-2">
-              <Network className="h-4 w-4 text-muted-foreground" />
-              <span className="text-xl font-bold text-cyber-cyan">
-                {metrics.network.toFixed(0)}%
+              <Bell className="h-4 w-4 text-muted-foreground" />
+              <span className={`text-xl font-bold ${stats.activeAlerts > 0 ? 'text-orange-500' : 'text-green-500'}`}>
+                {stats.activeAlerts}
               </span>
             </div>
-            <Progress value={metrics.network} className="h-1.5" />
-            <p className="text-xs text-muted-foreground mt-1">Network</p>
+            <p className="text-xs text-muted-foreground">Active Alerts</p>
           </CardContent>
         </Card>
 
@@ -140,50 +245,60 @@ export const PerformanceDashboard = () => {
           <CardContent className="pt-4">
             <div className="flex items-center justify-between mb-2">
               <Clock className="h-4 w-4 text-muted-foreground" />
-              <span className={`text-xl font-bold ${getStatusColor(metrics.latency, { low: 100, high: 150 })}`}>
-                {metrics.latency.toFixed(0)}ms
-              </span>
+              <span className="text-xl font-bold text-green-500">Online</span>
             </div>
-            <Progress value={100 - (metrics.latency / 2)} className="h-1.5" />
-            <p className="text-xs text-muted-foreground mt-1">Latency</p>
+            <p className="text-xs text-muted-foreground">System Status</p>
           </CardContent>
         </Card>
       </div>
 
-      {/* AI Learning & Stats */}
+      {/* Alerts & History */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Active Alerts */}
         <Card className="bg-card/50 backdrop-blur-sm border-cyber-purple/30">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <Brain className="h-4 w-4 text-cyber-purple" />
-              AI Learning Mode
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Bell className="h-4 w-4 text-cyber-purple" />
+                Active Alerts
+              </CardTitle>
+              {alerts.length > 0 && (
+                <Button variant="ghost" size="sm" onClick={clearAllAlerts} className="text-xs">
+                  Clear All
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Learning Progress</span>
-                <span className="text-sm font-mono">{metrics.aiLearningProgress.toFixed(1)}%</span>
+            {loading ? (
+              <p className="text-sm text-muted-foreground">Loading alerts...</p>
+            ) : alerts.length === 0 ? (
+              <div className="text-center py-4">
+                <CheckCircle2 className="h-8 w-8 mx-auto text-green-500 mb-2" />
+                <p className="text-sm text-muted-foreground">No active alerts</p>
               </div>
-              <Progress value={metrics.aiLearningProgress} className="h-2" />
-              <div className="grid grid-cols-3 gap-2 pt-2">
-                <div className="text-center">
-                  <p className="text-lg font-bold text-cyber-cyan">{metrics.scansCompleted}</p>
-                  <p className="text-xs text-muted-foreground">Scans</p>
-                </div>
-                <div className="text-center">
-                  <p className="text-lg font-bold text-cyber-purple">{metrics.vulnerabilitiesFound}</p>
-                  <p className="text-xs text-muted-foreground">Vulns Found</p>
-                </div>
-                <div className="text-center">
-                  <p className="text-lg font-bold text-green-500">{metrics.accuracy}%</p>
-                  <p className="text-xs text-muted-foreground">Accuracy</p>
-                </div>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {alerts.map((alert) => (
+                  <div key={alert.id} className="flex items-start justify-between p-2 bg-background/50 rounded border border-border/50">
+                    <div className="flex items-start gap-2">
+                      {getSeverityIcon(alert.severity)}
+                      <div>
+                        <p className="text-sm font-medium">{alert.title}</p>
+                        <p className="text-xs text-muted-foreground">{alert.source_module}</p>
+                      </div>
+                    </div>
+                    <Button variant="ghost" size="sm" onClick={() => clearAlert(alert.id)}>
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ))}
               </div>
-            </div>
+            )}
           </CardContent>
         </Card>
 
+        {/* Scan History */}
         <Card className="bg-card/50 backdrop-blur-sm border-cyber-purple/30">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm flex items-center gap-2">
@@ -192,22 +307,37 @@ export const PerformanceDashboard = () => {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2">
-              {scanHistory.slice(0, 4).map((scan, idx) => (
-                <div key={idx} className="flex items-center justify-between text-sm py-1 border-b border-border/30 last:border-0">
-                  <div className="flex items-center gap-2">
-                    <Zap className="h-3 w-3 text-cyber-purple" />
-                    <span className="font-mono text-xs">{scan.type}</span>
+            {loading ? (
+              <p className="text-sm text-muted-foreground">Loading history...</p>
+            ) : scanHistory.length === 0 ? (
+              <div className="text-center py-4">
+                <Activity className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                <p className="text-sm text-muted-foreground">No scans recorded yet</p>
+                <p className="text-xs text-muted-foreground">Run a scan to see activity here</p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {scanHistory.slice(0, 5).map((scan) => (
+                  <div key={scan.id} className="flex items-center justify-between text-sm py-2 border-b border-border/30 last:border-0">
+                    <div className="flex items-center gap-2">
+                      <Zap className="h-3 w-3 text-cyber-purple" />
+                      <div>
+                        <span className="font-mono text-xs">{scan.scan_type}</span>
+                        <p className="text-xs text-muted-foreground">{scan.module}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 text-xs">
+                      <Badge variant="outline" className={scan.status === 'completed' ? 'text-green-500' : 'text-yellow-500'}>
+                        {scan.status}
+                      </Badge>
+                      {scan.findings_count > 0 && (
+                        <Badge variant="outline">{scan.findings_count} findings</Badge>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                    <span>{scan.duration}s</span>
-                    <Badge variant="outline" className="text-xs">
-                      {scan.findings} findings
-                    </Badge>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
