@@ -21,6 +21,7 @@ import {
   Skull,
   Zap,
   Bot,
+  GraduationCap,
 } from "lucide-react";
 
 const Dashboard = () => {
@@ -125,6 +126,13 @@ const Dashboard = () => {
       icon: Zap,
       status: "active" as const,
       path: "/autonomous",
+    },
+    {
+      title: "Learning VAPT Assistant",
+      description: "AI-powered learning assistant that improves from your testing",
+      icon: GraduationCap,
+      status: "active" as const,
+      path: "/vapt-learning",
     },
   ];
 
