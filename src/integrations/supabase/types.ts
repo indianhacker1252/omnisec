@@ -14,6 +14,90 @@ export type Database = {
   }
   public: {
     Tables: {
+      scan_history: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          duration_ms: number | null
+          findings_count: number | null
+          id: string
+          module: string
+          report: Json | null
+          scan_type: string
+          started_at: string
+          status: string
+          target: string | null
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          duration_ms?: number | null
+          findings_count?: number | null
+          id?: string
+          module: string
+          report?: Json | null
+          scan_type: string
+          started_at?: string
+          status: string
+          target?: string | null
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          duration_ms?: number | null
+          findings_count?: number | null
+          id?: string
+          module?: string
+          report?: Json | null
+          scan_type?: string
+          started_at?: string
+          status?: string
+          target?: string | null
+        }
+        Relationships: []
+      }
+      security_alerts: {
+        Row: {
+          cleared_at: string | null
+          created_at: string
+          description: string | null
+          id: string
+          is_cleared: boolean | null
+          is_read: boolean | null
+          severity: string
+          source_module: string | null
+          target: string | null
+          title: string
+          type: string
+        }
+        Insert: {
+          cleared_at?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_cleared?: boolean | null
+          is_read?: boolean | null
+          severity: string
+          source_module?: string | null
+          target?: string | null
+          title: string
+          type: string
+        }
+        Update: {
+          cleared_at?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_cleared?: boolean | null
+          is_read?: boolean | null
+          severity?: string
+          source_module?: string | null
+          target?: string | null
+          title?: string
+          type?: string
+        }
+        Relationships: []
+      }
       security_audit_log: {
         Row: {
           action: string
@@ -43,6 +127,50 @@ export type Database = {
           user_id?: string | null
         }
         Relationships: []
+      }
+      security_reports: {
+        Row: {
+          created_at: string
+          findings: Json | null
+          id: string
+          module: string
+          recommendations: Json | null
+          scan_id: string | null
+          severity_counts: Json | null
+          summary: string | null
+          title: string
+        }
+        Insert: {
+          created_at?: string
+          findings?: Json | null
+          id?: string
+          module: string
+          recommendations?: Json | null
+          scan_id?: string | null
+          severity_counts?: Json | null
+          summary?: string | null
+          title: string
+        }
+        Update: {
+          created_at?: string
+          findings?: Json | null
+          id?: string
+          module?: string
+          recommendations?: Json | null
+          scan_id?: string | null
+          severity_counts?: Json | null
+          summary?: string | null
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "security_reports_scan_id_fkey"
+            columns: ["scan_id"]
+            isOneToOne: false
+            referencedRelation: "scan_history"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       user_roles: {
         Row: {
