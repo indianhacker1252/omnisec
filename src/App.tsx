@@ -22,6 +22,9 @@ import KaliIntegration from "./pages/KaliIntegration";
 import AutonomousAttack from "./pages/AutonomousAttack";
 import LLMRedTeam from "./pages/LLMRedTeam";
 import LearningVaptAssistant from "./pages/LearningVaptAssistant";
+import CloudSecurityModule from "./pages/CloudSecurityModule";
+import IAMSecurityModule from "./pages/IAMSecurityModule";
+import APISecurityModule from "./pages/APISecurityModule";
 import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
@@ -206,6 +209,9 @@ const App = () => (
               </ProtectedRoute>
             }
           />
+          <Route path="/cloud-security" element={<ProtectedRoute><CloudSecurityModule /></ProtectedRoute>} />
+          <Route path="/iam-security" element={<ProtectedRoute><IAMSecurityModule /></ProtectedRoute>} />
+          <Route path="/api-security" element={<ProtectedRoute><APISecurityModule /></ProtectedRoute>} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
