@@ -22,6 +22,13 @@ import {
   Zap,
   Bot,
   GraduationCap,
+  Cloud,
+  Key,
+  Network,
+  Target,
+  Layers,
+  TrendingUp,
+  Eye,
 } from "lucide-react";
 
 const Dashboard = () => {
@@ -40,7 +47,7 @@ const Dashboard = () => {
       title: "Web & App Analysis",
       description: "Burp Suite, ZAP integration for vulnerability scanning",
       icon: Globe,
-      status: "idle" as const,
+      status: "active" as const,
       path: "/webapp",
     },
     {
@@ -51,10 +58,31 @@ const Dashboard = () => {
       path: "/vuln",
     },
     {
+      title: "API Security",
+      description: "REST, GraphQL, gRPC testing with OWASP API Top 10",
+      icon: Network,
+      status: "active" as const,
+      path: "/api-security",
+    },
+    {
+      title: "Cloud Security",
+      description: "AWS, Azure, GCP misconfiguration and vulnerability testing",
+      icon: Cloud,
+      status: "active" as const,
+      path: "/cloud-security",
+    },
+    {
+      title: "IAM & Identity",
+      description: "OAuth, SAML, SSO, JWT, and MFA security testing",
+      icon: Key,
+      status: "active" as const,
+      path: "/iam-security",
+    },
+    {
       title: "Red Team Ops",
       description: "Metasploit, Empire sandbox for exploitation simulation",
       icon: Sword,
-      status: "alert" as const,
+      status: "active" as const,
       path: "/redteam",
     },
     {
@@ -68,14 +96,14 @@ const Dashboard = () => {
       title: "Wireless Security",
       description: "WiFi, Bluetooth, NFC, and radio frequency analysis",
       icon: Wifi,
-      status: "idle" as const,
+      status: "active" as const,
       path: "/wireless",
     },
     {
       title: "Forensics & IR",
       description: "Memory analysis, disk imaging, and incident response",
       icon: FileSearch,
-      status: "idle" as const,
+      status: "active" as const,
       path: "/forensics",
     },
     {

@@ -44,3 +44,12 @@ verify_jwt = false
 
 [functions.vapt-learning]
 verify_jwt = false
+
+[functions.cloud-security]
+verify_jwt = false
+
+[functions.iam-security]
+verify_jwt = false
+
+[functions.api-security]
+verify_jwt = false
