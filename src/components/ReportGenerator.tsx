@@ -1,12 +1,43 @@
+import { useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Download, FileText } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { 
+  FileText, 
+  Download,
+  Copy,
+  Target,
+  Loader2
+} from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+
+interface Finding {
+  type?: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  title?: string;
+  name?: string;
+  description?: string;
+  location?: string;
+  url?: string;
+  impact?: string;
+  remediation?: string;
+  cvss?: number;
+  cwe?: string;
+  mitreAttackId?: string;
+  owaspCategory?: string;
+  method?: string;
+}
 
 interface ReportData {
   target: string;
   scanType: string;
   timestamp: string;
-  findings: any[];
+  findings: Finding[];
   summary?: {
     total: number;
     critical: number;
@@ -17,11 +48,138 @@ interface ReportData {
 }
 
 interface ReportGeneratorProps {
-  data: ReportData;
+  data?: ReportData;
+  findings?: Finding[];
+  target?: string;
 }
 
-export const ReportGenerator = ({ data }: ReportGeneratorProps) => {
+export const ReportGenerator = ({ data, findings = [], target = "target.com" }: ReportGeneratorProps) => {
   const { toast } = useToast();
+  const [generating, setGenerating] = useState(false);
+  const [reportContent, setReportContent] = useState("");
+  const [reportTitle, setReportTitle] = useState(`Security Assessment - ${data?.target || target}`);
+
+  // Use data.findings if provided, otherwise use findings prop, otherwise use sample
+  const actualFindings: Finding[] = data?.findings || (findings.length > 0 ? findings : [
+    {
+      type: 'XSS',
+      severity: 'high',
+      title: 'Reflected Cross-Site Scripting in Search',
+      description: 'The search parameter is vulnerable to reflected XSS attacks.',
+      location: '/api/search?q=<payload>',
+      impact: 'Attackers can execute arbitrary JavaScript in victims browsers.',
+      remediation: 'Implement proper output encoding and Content-Security-Policy headers.',
+      cvss: 7.1,
+      cwe: 'CWE-79',
+      mitreAttackId: 'T1059.007',
+      owaspCategory: 'A03:2021 – Injection'
+    },
+    {
+      type: 'SQLi',
+      severity: 'critical',
+      title: 'SQL Injection in User Lookup',
+      description: 'The user ID parameter is vulnerable to SQL injection.',
+      location: '/api/users?id=<payload>',
+      impact: 'Complete database compromise, data exfiltration.',
+      remediation: 'Use parameterized queries and prepared statements.',
+      cvss: 9.8,
+      cwe: 'CWE-89',
+      mitreAttackId: 'T1190',
+      owaspCategory: 'A03:2021 – Injection'
+    }
+  ]);
+
+  const actualTarget = data?.target || target;
+
+  const getSeverityColor = (severity: string) => {
+    switch (severity) {
+      case 'critical': return 'bg-red-500/20 text-red-500';
+      case 'high': return 'bg-orange-500/20 text-orange-500';
+      case 'medium': return 'bg-yellow-500/20 text-yellow-500';
+      case 'low': return 'bg-blue-500/20 text-blue-500';
+      default: return 'bg-muted text-muted-foreground';
+    }
+  };
+
+  const generateMarkdownReport = () => {
+    const critical = actualFindings.filter(f => f.severity === 'critical').length;
+    const high = actualFindings.filter(f => f.severity === 'high').length;
+    const medium = actualFindings.filter(f => f.severity === 'medium').length;
+    const low = actualFindings.filter(f => f.severity === 'low').length;
+
+    return `# Security Assessment Report
+## Target: ${actualTarget}
+## Date: ${new Date().toLocaleDateString()}
+
+---
+
+## Executive Summary
+
+A comprehensive security assessment was conducted. The assessment identified **${actualFindings.length} vulnerabilities**:
+
+| Severity | Count |
+|----------|-------|
+| Critical | ${critical} |
+| High | ${high} |
+| Medium | ${medium} |
+| Low | ${low} |
+
+---
+
+## Vulnerability Details
+
+${actualFindings.map((finding, idx) => `
+### ${idx + 1}. ${finding.title || finding.name || 'Unnamed Finding'}
+
+**Severity:** ${finding.severity.toUpperCase()} | **CVSS:** ${finding.cvss || 'N/A'} | **CWE:** ${finding.cwe || 'N/A'}
+
+**MITRE ATT&CK:** ${finding.mitreAttackId || 'N/A'} | **OWASP:** ${finding.owaspCategory || 'N/A'}
+
+**Location:** \`${finding.location || finding.url || 'N/A'}\`
+
+**Description:**
+${finding.description || 'No description available'}
+
+**Impact:**
+${finding.impact || 'Potential security compromise.'}
+
+**Remediation:**
+${finding.remediation || 'Apply security best practices.'}
+
+---
+`).join('\n')}
+
+*Report generated by OmniSec AI Security Platform*
+`;
+  };
+
+  const generateAIReport = async () => {
+    setGenerating(true);
+    try {
+      const { data: aiData, error } = await supabase.functions.invoke('chat', {
+        body: {
+          messages: [
+            {
+              role: 'user',
+              content: `Generate a professional bug bounty report for the following security findings:
+Target: ${actualTarget}
+Findings: ${JSON.stringify(actualFindings, null, 2)}`
+            }
+          ]
+        }
+      });
+
+      if (error) throw error;
+      setReportContent(aiData?.response || generateMarkdownReport());
+      toast({ title: "Report Generated" });
+    } catch (error) {
+      console.error('Report generation error:', error);
+      setReportContent(generateMarkdownReport());
+      toast({ title: "Report Generated", description: "Using template format." });
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const generateHTMLReport = () => {
     const html = `
@@ -37,11 +195,8 @@ export const ReportGenerator = ({ data }: ReportGeneratorProps) => {
         .container { max-width: 1200px; margin: 0 auto; padding: 20px; background: white; }
         .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 40px; text-align: center; border-radius: 8px; margin-bottom: 30px; }
         .header h1 { font-size: 2.5em; margin-bottom: 10px; }
-        .header p { font-size: 1.1em; opacity: 0.9; }
         .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
         .meta-item { background: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #667eea; }
-        .meta-item label { font-weight: bold; color: #666; display: block; margin-bottom: 5px; font-size: 0.9em; }
-        .meta-item value { font-size: 1.2em; color: #333; }
         .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 30px; }
         .summary-card { padding: 20px; border-radius: 8px; text-align: center; color: white; }
         .summary-card.critical { background: #dc3545; }
@@ -49,24 +204,13 @@ export const ReportGenerator = ({ data }: ReportGeneratorProps) => {
         .summary-card.medium { background: #ffc107; color: #333; }
         .summary-card.low { background: #17a2b8; }
         .summary-card .count { font-size: 2.5em; font-weight: bold; }
-        .summary-card .label { font-size: 0.9em; opacity: 0.9; }
-        .findings { margin-top: 30px; }
         .finding { background: white; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; margin-bottom: 20px; border-left: 4px solid #667eea; }
         .finding.critical { border-left-color: #dc3545; }
         .finding.high { border-left-color: #fd7e14; }
-        .finding.medium { border-left-color: #ffc107; }
-        .finding.low { border-left-color: #17a2b8; }
-        .finding-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px; }
-        .finding-title { font-size: 1.3em; font-weight: bold; color: #333; }
-        .severity-badge { padding: 5px 15px; border-radius: 20px; font-size: 0.85em; font-weight: bold; text-transform: uppercase; }
+        .severity-badge { padding: 5px 15px; border-radius: 20px; font-size: 0.85em; font-weight: bold; }
         .severity-badge.critical { background: #dc3545; color: white; }
         .severity-badge.high { background: #fd7e14; color: white; }
-        .severity-badge.medium { background: #ffc107; color: #333; }
-        .severity-badge.low { background: #17a2b8; color: white; }
-        .finding-description { color: #666; margin-bottom: 15px; line-height: 1.8; }
-        .finding-details { background: #f8f9fa; padding: 15px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 0.9em; }
         .footer { text-align: center; padding: 30px; color: #666; border-top: 2px solid #dee2e6; margin-top: 40px; }
-        @media print { body { background: white; } .container { box-shadow: none; } }
     </style>
 </head>
 <body>
@@ -75,96 +219,49 @@ export const ReportGenerator = ({ data }: ReportGeneratorProps) => {
             <h1>🛡️ OmniSec™ Security Assessment Report</h1>
             <p>Advanced Vulnerability Assessment & Penetration Testing</p>
         </div>
-
         <div class="meta">
-            <div class="meta-item">
-                <label>Target</label>
-                <value>${data.target}</value>
-            </div>
-            <div class="meta-item">
-                <label>Scan Type</label>
-                <value>${data.scanType}</value>
-            </div>
-            <div class="meta-item">
-                <label>Timestamp</label>
-                <value>${new Date(data.timestamp).toLocaleString()}</value>
-            </div>
-            <div class="meta-item">
-                <label>Total Findings</label>
-                <value>${data.findings.length}</value>
-            </div>
+            <div class="meta-item"><label>Target</label><div>${actualTarget}</div></div>
+            <div class="meta-item"><label>Date</label><div>${new Date().toLocaleString()}</div></div>
+            <div class="meta-item"><label>Total Findings</label><div>${actualFindings.length}</div></div>
         </div>
-
-        ${data.summary ? `
-        <h2 style="margin-bottom: 20px; color: #333;">📊 Executive Summary</h2>
+        <h2 style="margin-bottom: 20px;">📊 Executive Summary</h2>
         <div class="summary">
-            <div class="summary-card critical">
-                <div class="count">${data.summary.critical || 0}</div>
-                <div class="label">Critical</div>
-            </div>
-            <div class="summary-card high">
-                <div class="count">${data.summary.high || 0}</div>
-                <div class="label">High</div>
-            </div>
-            <div class="summary-card medium">
-                <div class="count">${data.summary.medium || 0}</div>
-                <div class="label">Medium</div>
-            </div>
-            <div class="summary-card low">
-                <div class="count">${data.summary.low || 0}</div>
-                <div class="label">Low</div>
-            </div>
+            <div class="summary-card critical"><div class="count">${actualFindings.filter(f => f.severity === 'critical').length}</div><div>Critical</div></div>
+            <div class="summary-card high"><div class="count">${actualFindings.filter(f => f.severity === 'high').length}</div><div>High</div></div>
+            <div class="summary-card medium"><div class="count">${actualFindings.filter(f => f.severity === 'medium').length}</div><div>Medium</div></div>
+            <div class="summary-card low"><div class="count">${actualFindings.filter(f => f.severity === 'low').length}</div><div>Low</div></div>
         </div>
-        ` : ''}
-
-        <h2 style="margin: 30px 0 20px 0; color: #333;">🔍 Detailed Findings</h2>
-        <div class="findings">
-            ${data.findings.map((finding: any, index: number) => `
-                <div class="finding ${finding.severity || 'info'}">
-                    <div class="finding-header">
-                        <div class="finding-title">${index + 1}. ${finding.title || finding.name || 'Unnamed Finding'}</div>
-                        <span class="severity-badge ${finding.severity || 'info'}">${finding.severity || 'info'}</span>
-                    </div>
-                    <div class="finding-description">
-                        ${finding.description || 'No description available'}
-                    </div>
-                    ${finding.url || finding.cwe || finding.method ? `
-                    <div class="finding-details">
-                        ${finding.url ? `<div><strong>URL:</strong> ${finding.url}</div>` : ''}
-                        ${finding.method ? `<div><strong>Method:</strong> ${finding.method}</div>` : ''}
-                        ${finding.cwe ? `<div><strong>CWE:</strong> ${finding.cwe}</div>` : ''}
-                    </div>
-                    ` : ''}
+        <h2 style="margin: 30px 0 20px 0;">🔍 Detailed Findings</h2>
+        ${actualFindings.map((finding, index) => `
+            <div class="finding ${finding.severity || 'info'}">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                    <div style="font-size: 1.3em; font-weight: bold;">${index + 1}. ${finding.title || finding.name || 'Unnamed'}</div>
+                    <span class="severity-badge ${finding.severity}">${finding.severity?.toUpperCase()}</span>
                 </div>
-            `).join('')}
-        </div>
-
+                <div style="color: #666; margin-bottom: 15px;">${finding.description || ''}</div>
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; font-family: monospace; font-size: 0.9em;">
+                    ${finding.url || finding.location ? `<div><strong>URL:</strong> ${finding.url || finding.location}</div>` : ''}
+                    ${finding.cwe ? `<div><strong>CWE:</strong> ${finding.cwe}</div>` : ''}
+                    ${finding.cvss ? `<div><strong>CVSS:</strong> ${finding.cvss}</div>` : ''}
+                </div>
+            </div>
+        `).join('')}
         <div class="footer">
             <p><strong>OmniSec™ - Advanced VAPT Platform</strong></p>
-            <p>© 2024 HARSH MALIK. All Rights Reserved. | Patent Pending</p>
-            <p style="margin-top: 10px; font-size: 0.9em;">
-                ⚠️ This report contains confidential security information. Handle with appropriate care.
-            </p>
+            <p>© 2024 HARSH MALIK. All Rights Reserved.</p>
         </div>
     </div>
 </body>
-</html>
-    `;
+</html>`;
 
     const blob = new Blob([html], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `OmniSec_Report_${data.target.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.html`;
-    document.body.appendChild(a);
+    a.download = `OmniSec_Report_${actualTarget.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.html`;
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
-
-    toast({
-      title: "Report Generated",
-      description: "Security assessment report downloaded successfully",
-    });
+    toast({ title: "HTML Report Downloaded" });
   };
 
   const generateJSONReport = () => {
@@ -172,47 +269,146 @@ export const ReportGenerator = ({ data }: ReportGeneratorProps) => {
       meta: {
         tool: "OmniSec™ VAPT Platform",
         version: "1.0.0",
-        target: data.target,
-        scanType: data.scanType,
-        timestamp: data.timestamp,
-        generatedAt: new Date().toISOString(),
+        target: actualTarget,
+        scanType: data?.scanType || 'comprehensive',
+        timestamp: data?.timestamp || new Date().toISOString(),
       },
-      summary: data.summary || {
-        total: data.findings.length,
-        critical: data.findings.filter((f: any) => f.severity === 'critical').length,
-        high: data.findings.filter((f: any) => f.severity === 'high').length,
-        medium: data.findings.filter((f: any) => f.severity === 'medium').length,
-        low: data.findings.filter((f: any) => f.severity === 'low').length,
+      summary: data?.summary || {
+        total: actualFindings.length,
+        critical: actualFindings.filter(f => f.severity === 'critical').length,
+        high: actualFindings.filter(f => f.severity === 'high').length,
+        medium: actualFindings.filter(f => f.severity === 'medium').length,
+        low: actualFindings.filter(f => f.severity === 'low').length,
       },
-      findings: data.findings,
+      findings: actualFindings,
     };
 
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `OmniSec_Report_${data.target.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.json`;
-    document.body.appendChild(a);
+    a.download = `OmniSec_Report_${actualTarget.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.json`;
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
-
-    toast({
-      title: "JSON Report Generated",
-      description: "Raw data exported successfully",
-    });
+    toast({ title: "JSON Report Downloaded" });
   };
 
+  const copyReport = () => {
+    navigator.clipboard.writeText(reportContent || generateMarkdownReport());
+    toast({ title: "Copied to clipboard" });
+  };
+
+  const downloadMarkdown = () => {
+    const content = reportContent || generateMarkdownReport();
+    const blob = new Blob([content], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `security-report-${actualTarget.replace(/[^a-z0-9]/gi, '-')}-${Date.now()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({ title: "Markdown Report Downloaded" });
+  };
+
+  // If only data prop provided (legacy), show simple export buttons
+  if (data && !target) {
+    return (
+      <div className="flex gap-2">
+        <Button onClick={generateHTMLReport} variant="outline" className="gap-2">
+          <FileText className="h-4 w-4" />
+          Export HTML Report
+        </Button>
+        <Button onClick={generateJSONReport} variant="outline" className="gap-2">
+          <Download className="h-4 w-4" />
+          Export JSON
+        </Button>
+      </div>
+    );
+  }
+
+  // Enhanced report generator UI
   return (
-    <div className="flex gap-2">
-      <Button onClick={generateHTMLReport} variant="outline" className="gap-2">
-        <FileText className="h-4 w-4" />
-        Export HTML Report
-      </Button>
-      <Button onClick={generateJSONReport} variant="outline" className="gap-2">
-        <Download className="h-4 w-4" />
-        Export JSON
-      </Button>
-    </div>
+    <Card className="bg-card/50 backdrop-blur-sm border-green-500/30">
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileText className="h-5 w-5 text-green-500" />
+            Report Generator
+          </div>
+          <Badge variant="outline" className="text-green-500">Bug Bounty Ready</Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Input 
+          value={reportTitle}
+          onChange={(e) => setReportTitle(e.target.value)}
+          placeholder="Report Title"
+          className="font-medium"
+        />
+
+        <div className="grid grid-cols-4 gap-2">
+          {['critical', 'high', 'medium', 'low'].map(severity => (
+            <div key={severity} className={`p-2 rounded text-center ${getSeverityColor(severity)}`}>
+              <p className="text-lg font-bold">
+                {actualFindings.filter(f => f.severity === severity).length}
+              </p>
+              <p className="text-xs capitalize">{severity}</p>
+            </div>
+          ))}
+        </div>
+
+        <Tabs defaultValue="findings">
+          <TabsList className="w-full">
+            <TabsTrigger value="findings" className="flex-1">Findings</TabsTrigger>
+            <TabsTrigger value="preview" className="flex-1">Preview</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="findings">
+            <ScrollArea className="h-48">
+              <div className="space-y-2">
+                {actualFindings.map((finding, idx) => (
+                  <div key={idx} className="p-3 bg-background/50 rounded border border-border/50">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-medium text-sm">{finding.title || finding.name}</span>
+                      <Badge className={getSeverityColor(finding.severity)}>
+                        {finding.severity.toUpperCase()}
+                      </Badge>
+                    </div>
+                    <div className="flex gap-2 text-xs text-muted-foreground">
+                      {finding.cvss && <span>CVSS: {finding.cvss}</span>}
+                      {finding.cwe && <><span>•</span><span>{finding.cwe}</span></>}
+                      {finding.owaspCategory && <><span>•</span><span>{finding.owaspCategory}</span></>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          <TabsContent value="preview">
+            <ScrollArea className="h-48">
+              <Textarea 
+                value={reportContent || generateMarkdownReport()}
+                onChange={(e) => setReportContent(e.target.value)}
+                className="min-h-[180px] font-mono text-xs"
+              />
+            </ScrollArea>
+          </TabsContent>
+        </Tabs>
+
+        <div className="flex gap-2 flex-wrap">
+          <Button onClick={generateAIReport} disabled={generating} className="flex-1">
+            {generating ? (
+              <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>
+            ) : (
+              <><Target className="h-4 w-4 mr-2" />AI Generate</>
+            )}
+          </Button>
+          <Button variant="outline" onClick={copyReport}><Copy className="h-4 w-4" /></Button>
+          <Button variant="outline" onClick={downloadMarkdown}><Download className="h-4 w-4" /></Button>
+          <Button variant="outline" onClick={generateHTMLReport}><FileText className="h-4 w-4" /></Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 };

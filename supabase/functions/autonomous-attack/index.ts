@@ -379,19 +379,36 @@ async function storeAttackResults(
   userId: string,
   supabase: any
 ) {
+  // Use correct column names matching the security_audit_log table schema
   await supabase.from('security_audit_log').insert({
     user_id: userId,
     action: 'autonomous_attack',
-    resource_type: 'attack_chain',
-    resource_id: chain.target,
-    details: {
+    target: chain.target,
+    module: 'autonomous_attack',
+    result: JSON.stringify({
       objective: chain.objective,
       steps_executed: chain.currentStep,
       total_steps: chain.steps.length,
-      findings: chain.findings,
+      findings_count: chain.findings.length,
       learnings: chain.learnings,
-      status: chain.status,
-      attack_chain: chain
+      status: chain.status
+    })
+  });
+
+  // Also store in scan_history for reporting
+  await supabase.from('scan_history').insert({
+    module: 'autonomous_attack',
+    scan_type: 'autonomous',
+    target: chain.target,
+    status: chain.status,
+    findings_count: chain.findings.length,
+    started_at: new Date().toISOString(),
+    completed_at: new Date().toISOString(),
+    report: {
+      objective: chain.objective,
+      steps: chain.steps,
+      findings: chain.findings,
+      learnings: chain.learnings
     }
   });
 }
