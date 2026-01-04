@@ -14,40 +14,43 @@ serve(async (req) => {
   try {
     const { text, action } = await req.json();
     
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      console.error("LOVABLE_API_KEY not configured");
-      return new Response(JSON.stringify({ error: "AI service not configured" }), {
-        status: 500,
+    if (!text || text.trim() === "") {
+      return new Response(JSON.stringify({ 
+        error: "No text provided",
+        response: "Please speak a command."
+      }), {
+        status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
 
-    console.log(`Voice assistant request: action=${action}, text=${text?.substring(0, 50)}...`);
+    console.log(`Voice assistant request: action=${action}, text="${text}"`);
 
-    // Call Lovable AI for response
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { 
-            role: "system", 
-            content: `You are OmniSec Jarvis, an elite voice-activated cybersecurity AI assistant. You specialize in:
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    if (!LOVABLE_API_KEY) {
+      console.error("LOVABLE_API_KEY not configured");
+      return new Response(JSON.stringify({ 
+        error: "AI service not configured",
+        response: "Voice assistant is not configured. Please try again later."
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    const systemPrompt = `You are OmniSec Jarvis, an elite voice-activated cybersecurity AI assistant. You specialize in:
 
 🔒 SECURITY DOMAINS:
 - Network security and penetration testing (OSCP, OSCE level)
 - Vulnerability assessment and exploitation guidance
-- Security tool usage (Nmap, Metasploit, Burp Suite, ZAP)
+- Security tool usage (Nmap, Metasploit, Burp Suite, ZAP, Nuclei)
 - Threat analysis and incident response
 - OWASP Top 10 vulnerabilities
 - Web application security testing
 - Wireless security (WiFi, Bluetooth)
 - Forensics and malware analysis
+- Cloud security (AWS, Azure, GCP)
+- API security testing
 
 🎯 VOICE INTERACTION STYLE:
 - Keep responses concise (2-3 sentences for simple queries)
@@ -59,8 +62,18 @@ serve(async (req) => {
 When the user asks to scan or analyze something, provide the methodology and tool recommendations.
 When asked for commands, provide the actual syntax with explanations.
 
-Remember: You're a voice assistant, so responses should be speakable - avoid excessive formatting.` 
-          },
+Remember: You're a voice assistant, so responses should be speakable - avoid excessive formatting, markdown, or bullet points.`;
+
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: systemPrompt },
           { role: "user", content: text }
         ],
         max_tokens: 500,
@@ -72,14 +85,20 @@ Remember: You're a voice assistant, so responses should be speakable - avoid exc
       console.error("AI gateway error:", response.status, errorText);
       
       if (response.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limited. Please try again in a moment." }), {
-          status: 429,
+        return new Response(JSON.stringify({ 
+          error: "Rate limited",
+          response: "I'm getting too many requests. Please try again in a moment."
+        }), {
+          status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
       
-      return new Response(JSON.stringify({ error: "AI service temporarily unavailable" }), {
-        status: 500,
+      return new Response(JSON.stringify({ 
+        error: "AI service temporarily unavailable",
+        response: "I'm having trouble connecting to my AI systems. Please try again."
+      }), {
+        status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -98,8 +117,13 @@ Remember: You're a voice assistant, so responses should be speakable - avoid exc
 
   } catch (e) {
     console.error("Voice assistant error:", e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
-      status: 500,
+    
+    return new Response(JSON.stringify({ 
+      error: e instanceof Error ? e.message : "Unknown error",
+      response: "I encountered an error. Please try again.",
+      success: false
+    }), {
+      status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
