@@ -6,7 +6,6 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Max-Age': '86400',
 };
 
 interface VAPTRequest {
@@ -20,14 +19,12 @@ serve(async (req) => {
   }
 
   try {
-    // Initialize Supabase client
     const supabaseClient = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
       { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
     );
 
-    // Authenticate user (VAPT assistant available to all authenticated users)
     const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
     if (authError || !user) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -38,7 +35,6 @@ serve(async (req) => {
 
     const { prompt, mode = 'security' }: VAPTRequest = await req.json();
     
-    // Input validation
     if (!prompt || typeof prompt !== "string") {
       return new Response(JSON.stringify({ error: "Invalid prompt" }), {
         status: 400,
@@ -53,85 +49,63 @@ serve(async (req) => {
       });
     }
 
-    if (mode && !['security', 'analysis', 'recon', 'exploit'].includes(mode)) {
-      return new Response(JSON.stringify({ error: "Invalid mode" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
+    console.log(`[VAPT] Processing request - Mode: ${mode}, User: ${user.id}`);
+
+    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+    if (!LOVABLE_API_KEY) {
+      return new Response(JSON.stringify({ 
+        error: 'AI service not configured',
+        answer: 'VAPT Assistant is not configured. Please contact support.'
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    console.log(`[VAPT] Processing request - Mode: ${mode}, User: ${user.id}`);
+    const systemPrompts: Record<string, string> = {
+      security: `You are OmniSec VAPT Assistant, an advanced penetration testing AI. Provide detailed, actionable security assessments with:
+- Specific vulnerability details and CVE references when applicable
+- Proof-of-concept commands and tool usage (Nmap, Burp, SQLMap, etc.)
+- Remediation recommendations with code examples
+- CVSS scoring when applicable
+- Step-by-step attack methodology
 
-    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
-    if (!lovableApiKey) {
-      throw new Error('LOVABLE_API_KEY not configured');
-    }
+Always provide REAL, ACTIONABLE guidance for AUTHORIZED testing only.`,
 
-    // Enhanced system prompts based on the WormGPT logic
-    const systemPrompts = {
-      security: `You are OmniSec VAPT Assistant, an advanced penetration testing AI with deep knowledge of:
-- Network reconnaissance and enumeration
-- Vulnerability assessment and exploitation
-- Web application security (OWASP Top 10)
-- SQL injection, XSS, CSRF, and other attack vectors
-- Metasploit, Nmap, SQLMap, Burp Suite, and other security tools
-- Post-exploitation and privilege escalation
-- Social engineering techniques
-- Wireless security and network attacks
+      analysis: `You are an expert security analyst. Provide comprehensive threat analysis with:
+- CVE database references and exploit availability
+- Risk assessment with CVSS scoring  
+- Detailed technical analysis
+- Specific mitigation strategies
+- MITRE ATT&CK framework mapping`,
 
-When given a command like "scan network [target]" or "find vulnerabilities in [target]":
-1. Acknowledge the command
-2. Explain what tools would be used (e.g., Nmap for port scanning, Nuclei for vulnerability detection)
-3. Provide expected output format
-4. Give security recommendations
+      recon: `You are a reconnaissance specialist. Provide detailed OSINT and reconnaissance guidance including:
+- Specific tool commands (nmap, amass, subfinder, theHarvester, etc.)
+- Expected output analysis and interpretation
+- Target profiling methodology
+- Attack surface mapping techniques
+- Passive vs active reconnaissance approaches`,
 
-IMPORTANT: You must respond with actionable intelligence and explain each step of the security assessment process.`,
+      exploit: `You are a penetration testing expert. Provide exploitation guidance for AUTHORIZED testing only:
+- Exploit selection based on target vulnerabilities
+- Payload generation and customization approaches
+- Post-exploitation techniques and persistence
+- Detailed technical procedures with commands
+- Evasion techniques for security controls
 
-      analysis: `You are an expert security analyst specializing in:
-- CVE database analysis and threat intelligence
-- Risk assessment and CVSS scoring
-- Security incident investigation
-- Malware analysis and reverse engineering
-- Log analysis and forensic investigation
-- Compliance frameworks (ISO 27001, GDPR, SOC 2, PCI DSS)
-
-Analyze security data with precision and provide comprehensive reports.`,
-
-      recon: `You are a reconnaissance specialist expert in:
-- OSINT (Open Source Intelligence) gathering
-- Domain and subdomain enumeration
-- Port scanning and service detection
-- DNS reconnaissance and zone transfers
-- Social media and digital footprint analysis
-- Shodan and Censys database queries
-- Network mapping and topology discovery
-
-Provide detailed reconnaissance reports with actionable intelligence.`,
-
-      exploit: `You are a penetration testing expert specializing in:
-- Exploit development and weaponization
-- Buffer overflows and memory corruption
-- Privilege escalation techniques
-- Payload generation and obfuscation
-- C2 (Command & Control) operations
-- Active Directory exploitation
-- Web shell deployment and persistence
-
-CRITICAL: Only provide exploit guidance for authorized penetration testing. Always emphasize legal and ethical boundaries.`
+CRITICAL: Only for authorized penetration testing with proper scope.`
     };
-
-    const systemPrompt = systemPrompts[mode] || systemPrompts.security;
 
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${lovableApiKey}`,
+        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash',
         messages: [
-          { role: 'system', content: systemPrompt },
+          { role: 'system', content: systemPrompts[mode] || systemPrompts.security },
           { role: 'user', content: prompt }
         ],
         temperature: 0.7,
@@ -145,46 +119,27 @@ CRITICAL: Only provide exploit guidance for authorized penetration testing. Alwa
       
       if (response.status === 429) {
         return new Response(JSON.stringify({ 
-          error: 'Rate limit exceeded. Please try again later.',
-          type: 'rate_limit' 
+          error: 'Rate limit exceeded',
+          answer: 'Too many requests. Please wait a moment and try again.'
         }), {
-          status: 429,
+          status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       
-      if (response.status === 402) {
-        return new Response(JSON.stringify({ 
-          error: 'AI credits exhausted. Please add funds to continue.',
-          type: 'payment_required' 
-        }), {
-          status: 402,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-      
-      throw new Error(`AI Gateway error: ${response.status}`);
+      return new Response(JSON.stringify({ 
+        error: 'AI service error',
+        answer: 'I encountered an error processing your request. Please try again.'
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     const data = await response.json();
     const answer = data.choices?.[0]?.message?.content || 'No response generated';
 
     console.log('[VAPT] Response generated successfully');
-
-    // Audit log
-    await supabaseClient.from("security_audit_log").insert({
-      user_id: user.id,
-      action: "vapt_assistant_query",
-      resource_type: "ai_assistant",
-      resource_id: mode,
-      details: {
-        mode: mode,
-        prompt_preview: prompt.substring(0, 200),
-        response_length: answer.length,
-        timestamp: new Date().toISOString()
-      },
-      ip_address: req.headers.get("x-forwarded-for") || req.headers.get("cf-connecting-ip") || "unknown"
-    });
 
     return new Response(JSON.stringify({ 
       answer,
@@ -197,10 +152,10 @@ CRITICAL: Only provide exploit guidance for authorized penetration testing. Alwa
   } catch (error) {
     console.error('[VAPT] Error:', error);
     return new Response(JSON.stringify({ 
-      error: error instanceof Error ? error.message : 'Unknown error occurred',
-      type: 'server_error'
+      error: error instanceof Error ? error.message : 'Unknown error',
+      answer: "I encountered an error processing your request. Please try again."
     }), {
-      status: 500,
+      status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }

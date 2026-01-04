@@ -28,6 +28,32 @@ interface AttackChain {
   learnings: string[];
 }
 
+async function callAI(systemPrompt: string, userMessage: string, apiKey: string): Promise<string> {
+  const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'google/gemini-2.5-flash',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage }
+      ],
+      temperature: 0.5,
+      max_tokens: 2000,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`AI error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -41,7 +67,6 @@ serve(async (req) => {
       global: { headers: { Authorization: authHeader! } }
     });
 
-    // Verify user is admin
     const { data: { user } } = await supabase.auth.getUser(authHeader!.replace('Bearer ', ''));
     if (!user) throw new Error('Unauthorized');
 
@@ -60,7 +85,9 @@ serve(async (req) => {
     console.log(`[Autonomous Attack] Target: ${target}, Objective: ${objective}, Mode: ${mode}`);
 
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) throw new Error('LOVABLE_API_KEY not configured');
+    if (!LOVABLE_API_KEY) {
+      throw new Error('AI service not configured');
+    }
 
     // Step 1: AI generates attack plan
     const attackChain: AttackChain = await generateAttackPlan(target, objective, LOVABLE_API_KEY);
@@ -103,46 +130,23 @@ serve(async (req) => {
 });
 
 async function generateAttackPlan(target: string, objective: string, apiKey: string): Promise<AttackChain> {
-  const systemPrompt = `You are an elite autonomous penetration testing AI with expertise in:
-- OWASP Top 10 vulnerabilities
-- Network reconnaissance and enumeration
-- Web application security testing
-- API security assessment
-- Authentication and authorization bypass
-- SQL injection, XSS, CSRF attacks
-- Infrastructure vulnerability analysis
+  const systemPrompt = `You are an elite autonomous penetration testing AI. Generate attack chains for authorized security testing.
 
 You MUST respond with ONLY a valid JSON object (no markdown, no explanation) defining an attack chain.
 
-Available tools you can use:
-1. "recon" - Shodan reconnaissance for target discovery
-2. "webapp-scan" - Deep web application scanning (ZAP-style)
+Available tools:
+1. "recon" - Reconnaissance and target discovery
+2. "webapp-scan" - Web application security scanning
 3. "vuln-intel" - CVE and vulnerability intelligence
-4. "payload-generator" - Generate exploit payloads
-5. "wireless-scan" - Wireless network analysis
-6. "port-scan" - Network port enumeration
-7. "subdomain-enum" - Subdomain discovery
-8. "tech-fingerprint" - Technology stack identification
-
-Create a multi-step attack chain that:
-1. Starts with reconnaissance
-2. Identifies attack surface
-3. Scans for vulnerabilities
-4. Attempts exploitation (simulated)
-5. Reports findings
 
 Respond with JSON in this exact format:
 {
   "target": "${target}",
   "objective": "${objective}",
   "steps": [
-    {
-      "step": 1,
-      "action": "Reconnaissance - Discover target infrastructure",
-      "tool": "recon",
-      "parameters": {"target": "${target}"},
-      "status": "pending"
-    }
+    {"step": 1, "action": "Reconnaissance", "tool": "recon", "parameters": {"target": "${target}"}, "status": "pending"},
+    {"step": 2, "action": "Vulnerability Scan", "tool": "webapp-scan", "parameters": {"target": "${target}"}, "status": "pending"},
+    {"step": 3, "action": "Intelligence Gathering", "tool": "vuln-intel", "parameters": {"query": "${target}"}, "status": "pending"}
   ],
   "currentStep": 0,
   "status": "planning",
@@ -150,51 +154,36 @@ Respond with JSON in this exact format:
   "learnings": []
 }`;
 
-  const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'google/gemini-2.5-flash',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Generate an attack chain for target: ${target} with objective: ${objective}. Remember: respond with ONLY valid JSON, no markdown formatting.` }
-      ],
-      temperature: 0.7,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('[AI Plan Error]:', response.status, errorText);
-    throw new Error(`Failed to generate attack plan: ${response.status}`);
-  }
-
-  const data = await response.json();
-  let planText = data.choices[0].message.content.trim();
-  
-  // Remove markdown code blocks if present
-  planText = planText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  
   try {
-    const attackChain = JSON.parse(planText);
+    const planText = await callAI(systemPrompt, 
+      `Generate an attack chain for target: ${target} with objective: ${objective}. Respond with ONLY valid JSON.`,
+      apiKey
+    );
+    
+    const cleanText = planText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const attackChain = JSON.parse(cleanText);
     console.log('[Attack Plan Generated]:', JSON.stringify(attackChain, null, 2));
     return attackChain;
-  } catch (parseError) {
-    console.error('[JSON Parse Error]:', parseError);
-    console.error('[Raw Response]:', planText);
-    throw new Error('Failed to parse attack plan from AI');
+  } catch (error) {
+    console.error('[Attack Plan Error]:', error);
+    // Return a default attack chain
+    return {
+      target,
+      objective,
+      steps: [
+        { step: 1, action: "Reconnaissance", tool: "recon", parameters: { target }, status: "pending" },
+        { step: 2, action: "Web Application Scan", tool: "webapp-scan", parameters: { target }, status: "pending" },
+        { step: 3, action: "Vulnerability Intelligence", tool: "vuln-intel", parameters: { query: target }, status: "pending" }
+      ],
+      currentStep: 0,
+      status: "planning",
+      findings: [],
+      learnings: []
+    };
   }
 }
 
-async function executeAttackChain(
-  chain: AttackChain, 
-  supabase: any, 
-  authHeader: string,
-  apiKey: string
-) {
+async function executeAttackChain(chain: AttackChain, supabase: any, authHeader: string, apiKey: string) {
   chain.status = 'executing';
   
   for (let i = 0; i < chain.steps.length; i++) {
@@ -205,12 +194,10 @@ async function executeAttackChain(
     console.log(`[Executing Step ${step.step}] ${step.action}`);
     
     try {
-      // Execute the tool
       const result = await executeTool(step.tool, step.parameters, supabase, authHeader);
       step.result = result;
       step.status = 'success';
       
-      // Analyze results with AI
       const analysis = await analyzeStepResult(step, result, apiKey);
       
       if (analysis.vulnerabilities?.length > 0) {
@@ -221,47 +208,27 @@ async function executeAttackChain(
         chain.learnings.push(`Step ${step.step}: ${analysis.nextStepSuggestion}`);
       }
       
-      console.log(`[Step ${step.step} Success]`, {
-        findings: analysis.vulnerabilities?.length || 0,
-        suggestion: analysis.nextStepSuggestion
-      });
+      console.log(`[Step ${step.step} Success]`, { findings: analysis.vulnerabilities?.length || 0 });
       
     } catch (error) {
       step.status = 'failed';
       step.error = error instanceof Error ? error.message : 'Unknown error';
-      
       console.error(`[Step ${step.step} Failed]:`, error);
       
-      // AI learns from failure and adapts
       const learning = await learnFromFailure(step, error, apiKey);
       step.learnings = learning.insights;
       chain.learnings.push(`Step ${step.step} failure: ${learning.insights}`);
-      
-      // Try to adapt strategy
-      if (learning.retryWithDifferentApproach) {
-        step.parameters = learning.newParameters;
-        console.log(`[Adapting Strategy] Retrying step ${step.step} with new approach`);
-        i--; // Retry this step
-      }
     }
   }
   
   chain.status = 'completed';
 }
 
-async function executeTool(
-  tool: string, 
-  parameters: Record<string, any>,
-  supabase: any,
-  authHeader: string
-): Promise<any> {
-  
+async function executeTool(tool: string, parameters: Record<string, any>, supabase: any, authHeader: string): Promise<any> {
   const toolMapping: Record<string, string> = {
     'recon': 'recon',
     'webapp-scan': 'webapp-scan',
     'vuln-intel': 'vulnintel',
-    'payload-generator': 'payload-generator',
-    'wireless-scan': 'wireless-scan',
   };
   
   const functionName = toolMapping[tool];
@@ -278,108 +245,37 @@ async function executeTool(
   return data;
 }
 
-async function analyzeStepResult(
-  step: AttackStep, 
-  result: any,
-  apiKey: string
-): Promise<any> {
-  
-  const systemPrompt = `You are a penetration testing analyst. Analyze attack results and identify vulnerabilities.
-Respond with ONLY valid JSON (no markdown):
-{
-  "vulnerabilities": [{"type": "SQL Injection", "severity": "high", "location": "login form", "description": "..."}],
-  "nextStepSuggestion": "Based on findings, recommend: ..."
-}`;
-
-  const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'google/gemini-2.5-flash',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Analyze this ${step.tool} result:\n${JSON.stringify(result, null, 2)}` }
-      ],
-      temperature: 0.3,
-    }),
-  });
-
-  if (!response.ok) return { vulnerabilities: [], nextStepSuggestion: null };
-  
-  const data = await response.json();
-  let analysisText = data.choices[0].message.content.trim();
-  analysisText = analysisText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  
+async function analyzeStepResult(step: AttackStep, result: any, apiKey: string): Promise<any> {
   try {
-    return JSON.parse(analysisText);
+    const analysisText = await callAI(
+      `You are a penetration testing analyst. Analyze results and identify vulnerabilities. Respond with ONLY valid JSON: {"vulnerabilities": [{"type": "string", "severity": "high|medium|low", "description": "string"}], "nextStepSuggestion": "string"}`,
+      `Analyze this ${step.tool} result:\n${JSON.stringify(result, null, 2)}`,
+      apiKey
+    );
+
+    const cleanText = analysisText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    return JSON.parse(cleanText);
   } catch {
     return { vulnerabilities: [], nextStepSuggestion: null };
   }
 }
 
-async function learnFromFailure(
-  step: AttackStep,
-  error: any,
-  apiKey: string
-): Promise<any> {
-  
-  const systemPrompt = `You are an AI that learns from penetration testing failures.
-Analyze why an attack step failed and suggest adaptations.
-Respond with ONLY valid JSON (no markdown):
-{
-  "insights": "Why it failed and what we learned",
-  "retryWithDifferentApproach": true/false,
-  "newParameters": {"modified": "parameters"}
-}`;
-
-  const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'google/gemini-2.5-flash',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Step: ${JSON.stringify(step)}\nError: ${error}` }
-      ],
-      temperature: 0.5,
-    }),
-  });
-
-  if (!response.ok) {
-    return {
-      insights: 'Failed to analyze error',
-      retryWithDifferentApproach: false,
-      newParameters: step.parameters
-    };
-  }
-  
-  const data = await response.json();
-  let learningText = data.choices[0].message.content.trim();
-  learningText = learningText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  
+async function learnFromFailure(step: AttackStep, error: any, apiKey: string): Promise<any> {
   try {
-    return JSON.parse(learningText);
+    const learningText = await callAI(
+      `Analyze penetration testing failures. Respond with ONLY valid JSON: {"insights": "string", "retryWithDifferentApproach": false, "newParameters": {}}`,
+      `Step: ${JSON.stringify(step)}\nError: ${error}`,
+      apiKey
+    );
+
+    const cleanText = learningText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    return JSON.parse(cleanText);
   } catch {
-    return {
-      insights: 'Failed to parse learning response',
-      retryWithDifferentApproach: false,
-      newParameters: step.parameters
-    };
+    return { insights: 'Analysis failed', retryWithDifferentApproach: false, newParameters: step.parameters };
   }
 }
 
-async function storeAttackResults(
-  chain: AttackChain,
-  userId: string,
-  supabase: any
-) {
-  // Use correct column names matching the security_audit_log table schema
+async function storeAttackResults(chain: AttackChain, userId: string, supabase: any) {
   await supabase.from('security_audit_log').insert({
     user_id: userId,
     action: 'autonomous_attack',
@@ -395,7 +291,6 @@ async function storeAttackResults(
     })
   });
 
-  // Also store in scan_history for reporting
   await supabase.from('scan_history').insert({
     module: 'autonomous_attack',
     scan_type: 'autonomous',
