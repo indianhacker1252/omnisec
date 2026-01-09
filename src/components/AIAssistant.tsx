@@ -124,7 +124,7 @@ async function streamChat({
 
 export const AIAssistant = () => {
   const { toast } = useToast();
-  const { logScan, completeScan, saveReport } = useScanHistory();
+  const { logScan, completeScan, saveReport, createAlert } = useScanHistory();
 
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -197,12 +197,38 @@ export const AIAssistant = () => {
       vulnScanId ? completeScan(vulnScanId, { status: 'completed', findingsCount: vulnCount, report: vulnData }) : Promise.resolve(),
     ]);
 
+    // Create alerts for significant findings
+    const criticalCount = webData?.summary?.critical ?? 0;
+    const highCount = webData?.summary?.high ?? 0;
+    
+    if (criticalCount > 0) {
+      await createAlert({
+        type: 'vulnerability',
+        severity: 'critical',
+        title: `Critical vulnerabilities found on ${host}`,
+        description: `Scan detected ${criticalCount} critical security issues requiring immediate attention`,
+        sourceModule: 'autonomous_attack',
+        target: host
+      });
+    }
+    
+    if (highCount > 0) {
+      await createAlert({
+        type: 'vulnerability',
+        severity: 'high',
+        title: `High-risk vulnerabilities on ${host}`,
+        description: `${highCount} high severity issues detected during automated scan`,
+        sourceModule: 'autonomous_attack',
+        target: host
+      });
+    }
+
     await saveReport({
       module: 'autonomous_attack',
       title: `Domain Scan - ${host}`,
       summary: `Recon: ${reconCount} ports • Web: ${webCount} findings • CVE: ${vulnCount}`,
       findings: { target: host, recon: reconData, webapp: webData, vulnintel: vulnData },
-      severityCounts: { critical: webData?.summary?.critical ?? 0, high: webData?.summary?.high ?? 0, medium: webData?.summary?.medium ?? 0, low: webData?.summary?.low ?? 0 },
+      severityCounts: { critical: criticalCount, high: highCount, medium: webData?.summary?.medium ?? 0, low: webData?.summary?.low ?? 0 },
     });
 
     return { host, reconCount, webCount, vulnCount, reconData, webData, vulnData };
@@ -359,6 +385,21 @@ export const AIAssistant = () => {
     const counts = [reconCount, webCount, vulnCount, apiCount, cloudCount, iamCount];
     await Promise.all(scanIds.map((id, i) => id ? completeScan(id, { status: 'completed', findingsCount: counts[i], report: results[i] }) : Promise.resolve()));
 
+    // Create alerts for critical findings
+    const criticalCount = (webData?.summary?.critical ?? 0) + (apiData?.summary?.critical ?? 0) + (cloudData?.summary?.critical ?? 0);
+    const highCount = (webData?.summary?.high ?? 0) + (apiData?.summary?.high ?? 0);
+
+    if (criticalCount > 0 || totalFindings > 10) {
+      await createAlert({
+        type: 'red_team',
+        severity: 'critical',
+        title: `Red Team VAPT Complete: ${totalFindings} findings on ${host}`,
+        description: `Critical: ${criticalCount} | High: ${highCount} | Attack paths: ${attackSteps}`,
+        sourceModule: 'red_team',
+        target: host
+      });
+    }
+
     // Save comprehensive report
     await saveReport({
       module: 'red_team',
@@ -366,8 +407,8 @@ export const AIAssistant = () => {
       summary: `Total: ${totalFindings} findings | Attack Paths: ${attackSteps} | Critical vectors identified`,
       findings: { target: host, recon: reconData, webapp: webData, api: apiData, cloud: cloudData, iam: iamData, vulnintel: vulnData, autonomous: autonomousData },
       severityCounts: {
-        critical: (webData?.summary?.critical ?? 0) + (apiData?.summary?.critical ?? 0) + (cloudData?.summary?.critical ?? 0),
-        high: (webData?.summary?.high ?? 0) + (apiData?.summary?.high ?? 0),
+        critical: criticalCount,
+        high: highCount,
         medium: (webData?.summary?.medium ?? 0),
         low: (webData?.summary?.low ?? 0),
       },
