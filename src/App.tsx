@@ -25,6 +25,7 @@ import LearningVaptAssistant from "./pages/LearningVaptAssistant";
 import CloudSecurityModule from "./pages/CloudSecurityModule";
 import IAMSecurityModule from "./pages/IAMSecurityModule";
 import APISecurityModule from "./pages/APISecurityModule";
+import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
@@ -212,6 +213,7 @@ const App = () => (
           <Route path="/cloud-security" element={<ProtectedRoute><CloudSecurityModule /></ProtectedRoute>} />
           <Route path="/iam-security" element={<ProtectedRoute><IAMSecurityModule /></ProtectedRoute>} />
           <Route path="/api-security" element={<ProtectedRoute><APISecurityModule /></ProtectedRoute>} />
+          <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
