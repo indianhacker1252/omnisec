@@ -53,3 +53,6 @@ verify_jwt = false
 
 [functions.api-security]
 verify_jwt = false
+
+[functions.reverse-engineering]
+verify_jwt = false

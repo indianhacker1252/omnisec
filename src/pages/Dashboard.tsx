@@ -162,6 +162,13 @@ const Dashboard = () => {
       status: "active" as const,
       path: "/vapt-learning",
     },
+    {
+      title: "Security Reports",
+      description: "Centralized view of all scan reports and findings",
+      icon: Eye,
+      status: "active" as const,
+      path: "/reports",
+    },
   ];
 
   return (
