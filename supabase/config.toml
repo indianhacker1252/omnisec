@@ -56,3 +56,9 @@ verify_jwt = false
 
 [functions.reverse-engineering]
 verify_jwt = false
+
+[functions.subdomain-enum]
+verify_jwt = false
+
+[functions.endpoint-discovery]
+verify_jwt = false

@@ -114,7 +114,7 @@ const Reports = () => {
     return matchesSearch && matchesModule;
   });
 
-  const exportReport = (report: Report) => {
+const exportReportJSON = (report: Report) => {
     const content = {
       title: report.title,
       module: report.module,
@@ -132,7 +132,247 @@ const Reports = () => {
     a.download = `${report.title.replace(/\s+/g, '_')}_${new Date(report.created_at).toISOString().split('T')[0]}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    toast({ title: "Exported", description: "Report downloaded successfully" });
+    toast({ title: "Exported", description: "JSON report downloaded" });
+  };
+
+  const exportReportHTML = (report: Report) => {
+    const severityColors: Record<string, string> = {
+      critical: '#dc2626',
+      high: '#ea580c',
+      medium: '#ca8a04',
+      low: '#2563eb',
+      info: '#6b7280'
+    };
+
+    const renderFindings = (findings: any): string => {
+      if (!findings) return '<p>No findings data</p>';
+      if (typeof findings === 'object') {
+        return Object.entries(findings).map(([key, value]: [string, any]) => {
+          if (Array.isArray(value)) {
+            return `<div class="finding-section">
+              <h4>${key.replace(/_/g, ' ').toUpperCase()}</h4>
+              ${value.map((item: any) => `
+                <div class="finding-item ${item.severity || 'info'}">
+                  <div class="finding-header">
+                    <span class="finding-title">${item.title || item.name || JSON.stringify(item).slice(0, 50)}</span>
+                    ${item.severity ? `<span class="severity-badge" style="background: ${severityColors[item.severity] || '#6b7280'}">${item.severity.toUpperCase()}</span>` : ''}
+                  </div>
+                  ${item.description ? `<p class="finding-desc">${item.description}</p>` : ''}
+                  ${item.url ? `<p class="finding-url"><strong>URL:</strong> ${item.url}</p>` : ''}
+                  ${item.cwe ? `<p><strong>CWE:</strong> ${item.cwe}</p>` : ''}
+                  ${item.remediation ? `<p class="remediation"><strong>Remediation:</strong> ${item.remediation}</p>` : ''}
+                </div>
+              `).join('')}
+            </div>`;
+          }
+          return `<div class="finding-section"><h4>${key}</h4><pre>${JSON.stringify(value, null, 2)}</pre></div>`;
+        }).join('');
+      }
+      return `<pre>${JSON.stringify(findings, null, 2)}</pre>`;
+    };
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${report.title} - OmniSec Report</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f0f23; color: #e0e0e0; line-height: 1.6; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 40px 20px; }
+    .header { background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%); padding: 40px; border-radius: 16px; margin-bottom: 30px; text-align: center; }
+    .header h1 { font-size: 2.5em; margin-bottom: 10px; color: white; }
+    .header p { color: rgba(255,255,255,0.9); font-size: 1.1em; }
+    .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+    .meta-card { background: #1a1a2e; padding: 20px; border-radius: 12px; border-left: 4px solid #8b5cf6; }
+    .meta-card label { color: #8b8b8b; font-size: 0.85em; display: block; margin-bottom: 5px; }
+    .meta-card .value { font-size: 1.1em; font-weight: 600; }
+    .severity-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 15px; margin-bottom: 30px; }
+    .severity-card { padding: 25px; border-radius: 12px; text-align: center; }
+    .severity-card.critical { background: rgba(220, 38, 38, 0.2); border: 1px solid #dc2626; }
+    .severity-card.high { background: rgba(234, 88, 12, 0.2); border: 1px solid #ea580c; }
+    .severity-card.medium { background: rgba(202, 138, 4, 0.2); border: 1px solid #ca8a04; }
+    .severity-card.low { background: rgba(37, 99, 235, 0.2); border: 1px solid #2563eb; }
+    .severity-card .count { font-size: 2.5em; font-weight: bold; }
+    .severity-card .label { font-size: 0.9em; color: #8b8b8b; }
+    .section { background: #1a1a2e; padding: 25px; border-radius: 12px; margin-bottom: 20px; }
+    .section h3 { color: #a78bfa; margin-bottom: 15px; font-size: 1.3em; }
+    .finding-section { margin-bottom: 25px; }
+    .finding-section h4 { color: #8b5cf6; margin-bottom: 12px; font-size: 1.1em; border-bottom: 1px solid #333; padding-bottom: 8px; }
+    .finding-item { background: #252542; padding: 15px; border-radius: 8px; margin-bottom: 12px; border-left: 3px solid #6366f1; }
+    .finding-item.critical { border-left-color: #dc2626; }
+    .finding-item.high { border-left-color: #ea580c; }
+    .finding-item.medium { border-left-color: #ca8a04; }
+    .finding-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .finding-title { font-weight: 600; color: #e0e0e0; }
+    .severity-badge { padding: 4px 12px; border-radius: 20px; font-size: 0.75em; font-weight: bold; color: white; }
+    .finding-desc { color: #a0a0a0; margin: 8px 0; }
+    .finding-url { font-family: monospace; font-size: 0.9em; color: #8b5cf6; word-break: break-all; }
+    .remediation { background: rgba(34, 197, 94, 0.1); padding: 10px; border-radius: 6px; margin-top: 10px; border-left: 3px solid #22c55e; }
+    pre { background: #0f0f23; padding: 15px; border-radius: 8px; overflow-x: auto; font-size: 0.85em; }
+    .footer { text-align: center; padding: 30px; color: #6b7280; border-top: 1px solid #333; margin-top: 40px; }
+    @media print { body { background: white; color: black; } .container { padding: 20px; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🛡️ OmniSec™ Security Report</h1>
+      <p>${report.title}</p>
+    </div>
+    
+    <div class="meta-grid">
+      <div class="meta-card">
+        <label>Module</label>
+        <div class="value">${report.module.replace(/_/g, ' ').toUpperCase()}</div>
+      </div>
+      <div class="meta-card">
+        <label>Generated</label>
+        <div class="value">${new Date(report.created_at).toLocaleString()}</div>
+      </div>
+      <div class="meta-card">
+        <label>Report ID</label>
+        <div class="value" style="font-family: monospace; font-size: 0.9em;">${report.id.slice(0, 8)}</div>
+      </div>
+    </div>
+
+    ${report.summary ? `<div class="section"><h3>Executive Summary</h3><p>${report.summary}</p></div>` : ''}
+
+    ${report.severity_counts ? `
+    <div class="severity-summary">
+      <div class="severity-card critical">
+        <div class="count">${report.severity_counts.critical || 0}</div>
+        <div class="label">Critical</div>
+      </div>
+      <div class="severity-card high">
+        <div class="count">${report.severity_counts.high || 0}</div>
+        <div class="label">High</div>
+      </div>
+      <div class="severity-card medium">
+        <div class="count">${report.severity_counts.medium || 0}</div>
+        <div class="label">Medium</div>
+      </div>
+      <div class="severity-card low">
+        <div class="count">${report.severity_counts.low || 0}</div>
+        <div class="label">Low</div>
+      </div>
+    </div>
+    ` : ''}
+
+    <div class="section">
+      <h3>Detailed Findings</h3>
+      ${renderFindings(report.findings)}
+    </div>
+
+    ${report.recommendations ? `
+    <div class="section">
+      <h3>Recommendations</h3>
+      <pre>${JSON.stringify(report.recommendations, null, 2)}</pre>
+    </div>
+    ` : ''}
+
+    <div class="footer">
+      <p><strong>OmniSec™ - Advanced VAPT Platform</strong></p>
+      <p>Generated: ${new Date().toISOString()}</p>
+      <p>© 2024 HARSH MALIK. All Rights Reserved.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${report.title.replace(/\s+/g, '_')}_${new Date(report.created_at).toISOString().split('T')[0]}.html`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({ title: "Exported", description: "HTML report downloaded" });
+  };
+
+  const exportReportPDF = async (report: Report) => {
+    // Create a print-friendly HTML and trigger print dialog
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      toast({ title: "Error", description: "Please allow popups for PDF export", variant: "destructive" });
+      return;
+    }
+
+    const severityColors: Record<string, string> = {
+      critical: '#dc2626', high: '#ea580c', medium: '#ca8a04', low: '#2563eb', info: '#6b7280'
+    };
+
+    const renderFindings = (findings: any): string => {
+      if (!findings) return '<p>No findings</p>';
+      if (typeof findings === 'object') {
+        return Object.entries(findings).map(([key, value]: [string, any]) => {
+          if (Array.isArray(value)) {
+            return `<div style="margin-bottom: 20px;">
+              <h4 style="color: #6366f1; border-bottom: 1px solid #ddd; padding-bottom: 5px;">${key.replace(/_/g, ' ').toUpperCase()}</h4>
+              ${value.map((item: any) => `
+                <div style="background: #f8f9fa; padding: 12px; margin: 8px 0; border-left: 3px solid ${severityColors[item.severity] || '#6b7280'};">
+                  <strong>${item.title || item.name || 'Finding'}</strong>
+                  ${item.severity ? ` <span style="background: ${severityColors[item.severity]}; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px;">${item.severity.toUpperCase()}</span>` : ''}
+                  ${item.description ? `<p style="margin: 5px 0; color: #666;">${item.description}</p>` : ''}
+                  ${item.url ? `<p style="font-family: monospace; font-size: 12px; color: #6366f1;">${item.url}</p>` : ''}
+                </div>
+              `).join('')}
+            </div>`;
+          }
+          return `<div><h4>${key}</h4><pre style="font-size: 11px;">${JSON.stringify(value, null, 2)}</pre></div>`;
+        }).join('');
+      }
+      return `<pre style="font-size: 11px;">${JSON.stringify(findings, null, 2)}</pre>`;
+    };
+
+    printWindow.document.write(`<!DOCTYPE html>
+<html>
+<head>
+  <title>${report.title} - OmniSec Report</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 40px; color: #333; }
+    h1 { color: #6366f1; border-bottom: 3px solid #6366f1; padding-bottom: 10px; }
+    .summary-grid { display: flex; gap: 15px; margin: 20px 0; }
+    .summary-box { flex: 1; padding: 15px; border-radius: 8px; text-align: center; }
+    .critical { background: #fef2f2; border: 1px solid #dc2626; }
+    .high { background: #fff7ed; border: 1px solid #ea580c; }
+    .medium { background: #fefce8; border: 1px solid #ca8a04; }
+    .low { background: #eff6ff; border: 1px solid #2563eb; }
+    .count { font-size: 2em; font-weight: bold; }
+    @media print { body { padding: 20px; } }
+  </style>
+</head>
+<body>
+  <h1>🛡️ ${report.title}</h1>
+  <p><strong>Module:</strong> ${report.module.replace(/_/g, ' ').toUpperCase()} | <strong>Date:</strong> ${new Date(report.created_at).toLocaleString()}</p>
+  
+  ${report.summary ? `<div style="background: #f0f4ff; padding: 15px; margin: 20px 0; border-radius: 8px;"><strong>Summary:</strong> ${report.summary}</div>` : ''}
+  
+  ${report.severity_counts ? `
+  <div class="summary-grid">
+    <div class="summary-box critical"><div class="count">${report.severity_counts.critical || 0}</div>Critical</div>
+    <div class="summary-box high"><div class="count">${report.severity_counts.high || 0}</div>High</div>
+    <div class="summary-box medium"><div class="count">${report.severity_counts.medium || 0}</div>Medium</div>
+    <div class="summary-box low"><div class="count">${report.severity_counts.low || 0}</div>Low</div>
+  </div>
+  ` : ''}
+  
+  <h2>Findings</h2>
+  ${renderFindings(report.findings)}
+  
+  <div style="margin-top: 40px; text-align: center; color: #888; border-top: 1px solid #ddd; padding-top: 20px;">
+    <p>OmniSec™ Security Report | Generated: ${new Date().toISOString()}</p>
+  </div>
+</body>
+</html>`);
+    
+    printWindow.document.close();
+    setTimeout(() => {
+      printWindow.print();
+    }, 500);
+    
+    toast({ title: "PDF Export", description: "Print dialog opened - save as PDF" });
   };
 
   const exportAllReports = () => {
@@ -380,7 +620,7 @@ const Reports = () => {
                             )}
                           </div>
                         )}
-                        <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); exportReport(report); }}>
+                        <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); exportReportJSON(report); }} title="Export JSON">
                           <Download className="h-4 w-4" />
                         </Button>
                         <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -484,10 +724,18 @@ const Reports = () => {
                     {renderFindingsDetail(selectedReport.findings)}
                   </div>
 
-                  <div className="flex gap-2 pt-4 border-t">
-                    <Button onClick={() => exportReport(selectedReport)}>
+                  <div className="flex gap-2 pt-4 border-t flex-wrap">
+                    <Button onClick={() => exportReportJSON(selectedReport)} variant="outline">
                       <Download className="h-4 w-4 mr-2" />
-                      Export Report
+                      JSON
+                    </Button>
+                    <Button onClick={() => exportReportHTML(selectedReport)} variant="outline">
+                      <FileText className="h-4 w-4 mr-2" />
+                      HTML
+                    </Button>
+                    <Button onClick={() => exportReportPDF(selectedReport)}>
+                      <Download className="h-4 w-4 mr-2" />
+                      PDF
                     </Button>
                   </div>
                 </div>
