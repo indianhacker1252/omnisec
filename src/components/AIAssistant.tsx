@@ -314,17 +314,18 @@ export const AIAssistant = () => {
     return { host, totalFindings, reconCount, webCount, vulnCount, apiCount, cloudCount, iamCount };
   };
 
-  // Red Team / Full VAPT automation
+  // Red Team / Full VAPT automation with subdomain & endpoint discovery
   const runRedTeamWorkflow = async (rawTarget: string) => {
     const host = normalizeHost(rawTarget);
     const url = normalizeUrl(rawTarget);
 
-    updateLastAssistantMessage(`🔴 RED TEAM VAPT: ${host}\n\n⚔️ Phase 1/5: Reconnaissance & Attack Surface Mapping...`);
+    updateLastAssistantMessage(`🔴 RED TEAM VAPT: ${host}\n\n⚔️ Phase 1/6: Subdomain Enumeration & Attack Surface Mapping...`);
     toast({ title: "Red Team VAPT Started", description: `Full penetration testing for ${host}` });
 
     // Log all scans
     const scanIds = await Promise.all([
       logScan({ module: 'recon', scanType: 'Red Team - Recon', target: host }),
+      logScan({ module: 'recon', scanType: 'Red Team - Subdomain Enum', target: host }),
       logScan({ module: 'webapp', scanType: 'Red Team - Web Pentest', target: url }),
       logScan({ module: 'vuln', scanType: 'Red Team - Vuln Assessment', target: host }),
       logScan({ module: 'api', scanType: 'Red Team - API Pentest', target: url }),
@@ -332,13 +333,25 @@ export const AIAssistant = () => {
       logScan({ module: 'iam', scanType: 'Red Team - IAM Audit', target: host }),
     ]);
 
-    // Phase 1: Recon
-    const reconResp = await supabase.functions.invoke('recon', { body: { target: host } });
+    // Phase 1: Subdomain enumeration + Recon in parallel
+    const [reconResp, subdomainResp] = await Promise.all([
+      supabase.functions.invoke('recon', { body: { target: host } }),
+      supabase.functions.invoke('subdomain-enum', { body: { domain: host } })
+    ]);
     const reconData = reconResp.data || {};
+    const subdomainData = subdomainResp.data || {};
+    const subdomainCount = subdomainData?.total || 0;
     
-    updateLastAssistantMessage(`🔴 RED TEAM VAPT: ${host}\n\n✅ Phase 1: Recon complete (${reconData?.ports?.length || 0} ports)\n⚔️ Phase 2/5: Web Application Penetration Testing...`);
+    updateLastAssistantMessage(`🔴 RED TEAM VAPT: ${host}\n\n✅ Phase 1: Recon complete (${reconData?.ports?.length || 0} ports, ${subdomainCount} subdomains)\n⚔️ Phase 2/6: Endpoint Discovery...`);
 
-    // Phase 2: Web + VulnIntel
+    // Phase 2: Endpoint discovery
+    const endpointResp = await supabase.functions.invoke('endpoint-discovery', { body: { target: url } });
+    const endpointData = endpointResp.data || {};
+    const endpointCount = endpointData?.total || 0;
+
+    updateLastAssistantMessage(`🔴 RED TEAM VAPT: ${host}\n\n✅ Phase 1-2: Recon complete (${subdomainCount} subdomains, ${endpointCount} endpoints)\n⚔️ Phase 3/6: Web Application Penetration Testing...`);
+
+    // Phase 3: Web + VulnIntel
     const [webResp, vulnResp] = await Promise.all([
       supabase.functions.invoke('webapp-scan', { body: { target: url } }),
       supabase.functions.invoke('vulnintel', { body: { query: host } }),
@@ -346,15 +359,15 @@ export const AIAssistant = () => {
     const webData = webResp.data || {};
     const vulnData = vulnResp.data || {};
 
-    updateLastAssistantMessage(`🔴 RED TEAM VAPT: ${host}\n\n✅ Phase 1: Recon complete\n✅ Phase 2: Web Pentest complete (${webData?.findings?.length || 0} findings)\n⚔️ Phase 3/5: API Security Testing...`);
+    updateLastAssistantMessage(`🔴 RED TEAM VAPT: ${host}\n\n✅ Phase 1-3: Complete (${webData?.findings?.length || 0} web findings)\n⚔️ Phase 4/6: API Security Testing...`);
 
-    // Phase 3: API
+    // Phase 4: API
     const apiResp = await supabase.functions.invoke('api-security', { body: { target: url, scanType: 'comprehensive' } });
     const apiData = apiResp.data || {};
 
-    updateLastAssistantMessage(`🔴 RED TEAM VAPT: ${host}\n\n✅ Phase 1-3: Complete\n⚔️ Phase 4/5: Cloud & IAM Security Audit...`);
+    updateLastAssistantMessage(`🔴 RED TEAM VAPT: ${host}\n\n✅ Phase 1-4: Complete\n⚔️ Phase 5/6: Cloud & IAM Security Audit...`);
 
-    // Phase 4: Cloud + IAM
+    // Phase 5: Cloud + IAM
     const [cloudResp, iamResp] = await Promise.all([
       supabase.functions.invoke('cloud-security', { body: { provider: 'auto', target: host } }),
       supabase.functions.invoke('iam-security', { body: { target: host, scanType: 'full' } }),
@@ -362,11 +375,16 @@ export const AIAssistant = () => {
     const cloudData = cloudResp.data || {};
     const iamData = iamResp.data || {};
 
-    updateLastAssistantMessage(`🔴 RED TEAM VAPT: ${host}\n\n✅ Phase 1-4: Complete\n📊 Phase 5/5: Generating Pentest Report...`);
+    updateLastAssistantMessage(`🔴 RED TEAM VAPT: ${host}\n\n✅ Phase 1-5: Complete\n📊 Phase 6/6: AI Attack Synthesis & Report Generation...`);
 
-    // Phase 5: AI-powered attack synthesis
+    // Phase 6: AI-powered attack synthesis
     const autonomousResp = await supabase.functions.invoke('autonomous-attack', {
-      body: { target: host, objective: `Full VAPT based on findings: ${webData?.findings?.length || 0} web, ${apiData?.findings?.length || 0} API, ${cloudData?.findings?.length || 0} cloud vulnerabilities` }
+      body: { 
+        target: host, 
+        objective: `Full VAPT based on findings: ${subdomainCount} subdomains, ${endpointCount} endpoints, ${webData?.findings?.length || 0} web, ${apiData?.findings?.length || 0} API, ${cloudData?.findings?.length || 0} cloud vulnerabilities`,
+        subdomains: subdomainData?.subdomains?.slice(0, 10),
+        endpoints: endpointData?.endpoints?.slice(0, 20)
+      }
     });
     const autonomousData = autonomousResp.data || {};
 
@@ -381,9 +399,9 @@ export const AIAssistant = () => {
     const totalFindings = reconCount + webCount + vulnCount + apiCount + cloudCount + iamCount;
 
     // Complete all scans
-    const results = [reconData, webData, vulnData, apiData, cloudData, iamData];
-    const counts = [reconCount, webCount, vulnCount, apiCount, cloudCount, iamCount];
-    await Promise.all(scanIds.map((id, i) => id ? completeScan(id, { status: 'completed', findingsCount: counts[i], report: results[i] }) : Promise.resolve()));
+    const results = [reconData, subdomainData, webData, vulnData, apiData, cloudData, iamData];
+    const counts = [reconCount, subdomainCount, webCount, vulnCount, apiCount, cloudCount, iamCount];
+    await Promise.all(scanIds.map((id, i) => id ? completeScan(id, { status: 'completed', findingsCount: counts[i] || 0, report: results[i] }) : Promise.resolve()));
 
     // Create alerts for critical findings
     const criticalCount = (webData?.summary?.critical ?? 0) + (apiData?.summary?.critical ?? 0) + (cloudData?.summary?.critical ?? 0);
@@ -394,18 +412,29 @@ export const AIAssistant = () => {
         type: 'red_team',
         severity: 'critical',
         title: `Red Team VAPT Complete: ${totalFindings} findings on ${host}`,
-        description: `Critical: ${criticalCount} | High: ${highCount} | Attack paths: ${attackSteps}`,
+        description: `Critical: ${criticalCount} | High: ${highCount} | Subdomains: ${subdomainCount} | Endpoints: ${endpointCount} | Attack paths: ${attackSteps}`,
         sourceModule: 'red_team',
         target: host
       });
     }
 
-    // Save comprehensive report
+    // Save comprehensive report with all data
     await saveReport({
       module: 'red_team',
       title: `Red Team VAPT Report - ${host}`,
-      summary: `Total: ${totalFindings} findings | Attack Paths: ${attackSteps} | Critical vectors identified`,
-      findings: { target: host, recon: reconData, webapp: webData, api: apiData, cloud: cloudData, iam: iamData, vulnintel: vulnData, autonomous: autonomousData },
+      summary: `Total: ${totalFindings} findings | Subdomains: ${subdomainCount} | Endpoints: ${endpointCount} | Attack Paths: ${attackSteps}`,
+      findings: { 
+        target: host, 
+        recon: reconData, 
+        subdomains: subdomainData,
+        endpoints: endpointData,
+        webapp: webData, 
+        api: apiData, 
+        cloud: cloudData, 
+        iam: iamData, 
+        vulnintel: vulnData, 
+        autonomous: autonomousData 
+      },
       severityCounts: {
         critical: criticalCount,
         high: highCount,
@@ -414,8 +443,8 @@ export const AIAssistant = () => {
       },
     });
 
-    toast({ title: "Red Team VAPT Complete", description: `${totalFindings} findings, ${attackSteps} attack paths identified` });
-    return { host, totalFindings, attackSteps, reconCount, webCount, vulnCount, apiCount, cloudCount, iamCount };
+    toast({ title: "Red Team VAPT Complete", description: `${totalFindings} findings, ${subdomainCount} subdomains, ${endpointCount} endpoints` });
+    return { host, totalFindings, attackSteps, reconCount, webCount, vulnCount, apiCount, cloudCount, iamCount, subdomainCount, endpointCount };
   };
 
   const handleSend = async () => {
@@ -475,7 +504,7 @@ export const AIAssistant = () => {
       try {
         if (pattern.action === 'red_team') {
           const result = await runRedTeamWorkflow(target);
-          updateLastAssistantMessage(`🔴 RED TEAM VAPT COMPLETE: ${result.host}\n\n📊 FINDINGS SUMMARY:\n• Reconnaissance: ${result.reconCount} open ports\n• Web Security: ${result.webCount} vulnerabilities\n• API Security: ${result.apiCount} issues\n• Cloud Security: ${result.cloudCount} misconfigurations\n• IAM Security: ${result.iamCount} weaknesses\n• Known CVEs: ${result.vulnCount}\n• Attack Paths: ${result.attackSteps}\n\n🎯 Total: ${result.totalFindings} findings\n\n✅ Full report saved. Check Reports tab for details.`);
+          updateLastAssistantMessage(`🔴 RED TEAM VAPT COMPLETE: ${result.host}\n\n📊 ATTACK SURFACE:\n• Subdomains: ${result.subdomainCount}\n• Endpoints: ${result.endpointCount}\n• Open Ports: ${result.reconCount}\n\n🔍 FINDINGS:\n• Web Security: ${result.webCount} vulnerabilities\n• API Security: ${result.apiCount} issues\n• Cloud Security: ${result.cloudCount} misconfigurations\n• IAM Security: ${result.iamCount} weaknesses\n• Known CVEs: ${result.vulnCount}\n• Attack Paths: ${result.attackSteps}\n\n🎯 Total: ${result.totalFindings} findings\n\n✅ Full report saved. Check Reports tab for HTML/PDF export.`);
         } else if (pattern.action === 'full_audit') {
           const result = await runFullAuditWorkflow(target);
           updateLastAssistantMessage(`✅ FULL SECURITY AUDIT COMPLETE: ${result.host}\n\n📊 FINDINGS:\n• Recon: ${result.reconCount} ports\n• Web: ${result.webCount} issues\n• API: ${result.apiCount} vulnerabilities\n• Cloud: ${result.cloudCount} misconfigs\n• IAM: ${result.iamCount} weaknesses\n• CVEs: ${result.vulnCount}\n\n🎯 Total: ${result.totalFindings} findings\n\n✅ Combined report saved.`);
