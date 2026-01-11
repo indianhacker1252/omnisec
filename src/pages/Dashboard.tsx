@@ -4,6 +4,8 @@ import { SystemStatus } from "@/components/SystemStatus";
 import { AIAssistant } from "@/components/AIAssistant";
 import { VoiceAssistant } from "@/components/VoiceAssistant";
 import { PerformanceDashboard } from "@/components/PerformanceDashboard";
+import { ScanProgressDashboard } from "@/components/ScanProgressDashboard";
+import { AutomatedWorkflow } from "@/components/AutomatedWorkflow";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -185,6 +187,12 @@ const Dashboard = () => {
           <div className="lg:col-span-2 h-[500px]">
             <AIAssistant />
           </div>
+        </div>
+
+        {/* Scan Progress & Automated Workflow */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          <ScanProgressDashboard />
+          <AutomatedWorkflow />
         </div>
 
         {/* Performance Dashboard */}
