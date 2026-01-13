@@ -432,22 +432,39 @@ const exportReportJSON = (report: Report) => {
               <h4 className="font-semibold capitalize mb-2">{key.replace(/_/g, ' ')}</h4>
               {Array.isArray(value) ? (
                 <div className="space-y-2">
-                  {value.slice(0, 10).map((item: any, i: number) => (
-                    <div key={i} className="text-sm p-2 bg-muted/30 rounded">
+                  {value.slice(0, 15).map((item: any, i: number) => (
+                    <div key={i} className="text-sm p-3 bg-muted/30 rounded border-l-2 border-primary/50">
                       {typeof item === 'object' ? (
-                        <div>
-                          {item.title && <span className="font-medium">{item.title}</span>}
-                          {item.severity && <Badge className={`ml-2 ${severityColors[item.severity] || ''}`}>{item.severity}</Badge>}
-                          {item.description && <p className="text-xs text-muted-foreground mt-1">{item.description}</p>}
-                          {item.cve && <span className="text-xs text-cyber-cyan">{item.cve}</span>}
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {item.title && <span className="font-medium">{item.title}</span>}
+                            {item.name && !item.title && <span className="font-medium">{item.name}</span>}
+                            {item.severity && <Badge className={`${severityColors[item.severity] || ''}`}>{item.severity.toUpperCase()}</Badge>}
+                          </div>
+                          {(item.endpoint || item.url || item.target) && (
+                            <div className="flex items-center gap-2 text-xs">
+                              <Globe className="h-3 w-3 text-primary" />
+                              <code className="bg-background px-2 py-0.5 rounded font-mono break-all">
+                                {item.endpoint || item.url || item.target}
+                              </code>
+                            </div>
+                          )}
+                          {item.description && <p className="text-xs text-muted-foreground">{item.description}</p>}
+                          {item.remediation && (
+                            <div className="text-xs bg-green-500/10 text-green-400 p-2 rounded">
+                              <strong>Fix:</strong> {item.remediation}
+                            </div>
+                          )}
+                          {item.cwe && <span className="text-xs text-cyber-cyan bg-cyber-cyan/10 px-2 py-0.5 rounded">{item.cwe}</span>}
+                          {item.cve && <span className="text-xs text-orange-400 bg-orange-400/10 px-2 py-0.5 rounded ml-1">{item.cve}</span>}
                         </div>
                       ) : (
                         <span>{String(item)}</span>
                       )}
                     </div>
                   ))}
-                  {value.length > 10 && (
-                    <p className="text-xs text-muted-foreground">...and {value.length - 10} more</p>
+                  {value.length > 15 && (
+                    <p className="text-xs text-muted-foreground">...and {value.length - 15} more findings</p>
                   )}
                 </div>
               ) : typeof value === 'object' ? (

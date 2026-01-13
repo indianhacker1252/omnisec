@@ -29,6 +29,9 @@ import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
+import ScopeValidatorPage from "./pages/ScopeValidatorPage";
+import EnterpriseVAPTPage from "./pages/EnterpriseVAPTPage";
+import PDFReportsPage from "./pages/PDFReportsPage";
 
 const queryClient = new QueryClient();
 
@@ -214,6 +217,9 @@ const App = () => (
           <Route path="/iam-security" element={<ProtectedRoute><IAMSecurityModule /></ProtectedRoute>} />
           <Route path="/api-security" element={<ProtectedRoute><APISecurityModule /></ProtectedRoute>} />
           <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
+          <Route path="/scope-validator" element={<ProtectedRoute><ScopeValidatorPage /></ProtectedRoute>} />
+          <Route path="/enterprise-vapt" element={<ProtectedRoute><EnterpriseVAPTPage /></ProtectedRoute>} />
+          <Route path="/pdf-reports" element={<ProtectedRoute><PDFReportsPage /></ProtectedRoute>} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>

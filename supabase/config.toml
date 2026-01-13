@@ -62,3 +62,6 @@ verify_jwt = false
 
 [functions.endpoint-discovery]
 verify_jwt = false
+
+[functions.deep-scanner]
+verify_jwt = false
