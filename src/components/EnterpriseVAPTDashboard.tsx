@@ -121,103 +121,6 @@ export const EnterpriseVAPTDashboard = () => {
     return t.startsWith("http://") || t.startsWith("https://") ? t : `https://${normalizeHost(t)}`;
   };
 
-  const executeModuleScan = async (module: ScanModule, host: string, url: string): Promise<any> => {
-    let functionName = '';
-    let body: any = {};
-
-    switch (module.id) {
-      case 'web':
-        functionName = 'webapp-scan';
-        body = { target: url, deep: true };
-        break;
-      case 'api':
-        functionName = 'api-security';
-        body = { target: url, scanType: 'comprehensive', includeGraphQL: true };
-        break;
-      case 'network':
-        functionName = 'recon';
-        body = { target: host, deep: true };
-        break;
-      case 'cloud':
-        functionName = 'cloud-security';
-        body = { provider: 'auto', target: host, includeContainers: true };
-        break;
-      case 'iam':
-        functionName = 'iam-security';
-        body = { target: host, scanType: 'full', includeAD: true };
-        break;
-      case 'container':
-        functionName = 'cloud-security';
-        body = { provider: 'kubernetes', target: host, containerScan: true };
-        break;
-      case 'wireless':
-        functionName = 'wireless-scan';
-        body = { target: host };
-        break;
-      default:
-        functionName = 'recon';
-        body = { target: host };
-    }
-
-    const response = await supabase.functions.invoke(functionName, { body });
-    return response.data || {};
-  };
-
-  const calculateConfidenceScore = async (finding: any, moduleId: string): Promise<ConfidenceScore> => {
-    // AI-based confidence scoring
-    const factors = {
-      exploitability: Math.random() * 40 + 60, // 60-100
-      businessImpact: Math.random() * 40 + 60,
-      assetCriticality: Math.random() * 40 + 60,
-      exposureLevel: Math.random() * 40 + 60,
-      complianceRisk: Math.random() * 40 + 60,
-    };
-
-    const score = Object.values(factors).reduce((a, b) => a + b, 0) / 5;
-    const falsePositiveProbability = Math.max(0, 100 - score) * 0.5;
-
-    return {
-      findingId: finding.id || crypto.randomUUID(),
-      score,
-      factors,
-      aiReasoning: `Analysis based on ${moduleId} module. Exploitability confirmed via behavioral analysis.`,
-      falsePositiveProbability
-    };
-  };
-
-  const correlateFindings = (allResults: Record<string, any>) => {
-    const correlations: any[] = [];
-    const attackPaths: any[] = [];
-
-    // Example correlation logic
-    const webFindings = allResults['web']?.findings || [];
-    const networkFindings = allResults['network']?.ports || [];
-    const cloudFindings = allResults['cloud']?.findings || [];
-
-    // Look for chained attack paths
-    if (webFindings.some((f: any) => f.type?.includes('SQL')) && networkFindings.some((p: any) => p.service === 'mysql')) {
-      attackPaths.push({
-        id: 'ap-1',
-        name: 'Web-to-Database Attack Path',
-        severity: 'critical',
-        steps: ['SQL Injection on Web App', 'Database Service Exposed', 'Potential Data Exfiltration'],
-        mitre: ['T1190', 'T1505', 'T1567']
-      });
-    }
-
-    if (cloudFindings.some((f: any) => f.severity === 'critical') && allResults['iam']?.findings?.length > 0) {
-      attackPaths.push({
-        id: 'ap-2',
-        name: 'Cloud Privilege Escalation Path',
-        severity: 'high',
-        steps: ['Cloud Misconfiguration', 'IAM Policy Weakness', 'Privilege Escalation'],
-        mitre: ['T1078', 'T1548', 'T1134']
-      });
-    }
-
-    return { correlations, attackPaths };
-  };
-
   const runEnterpriseVAPT = async () => {
     if (!target.trim()) {
       toast({ title: "Target Required", description: "Please enter a target", variant: "destructive" });
@@ -233,139 +136,130 @@ export const EnterpriseVAPTDashboard = () => {
     const host = normalizeHost(target);
     const url = normalizeUrl(target);
     const enabledModules = modules.filter(m => m.enabled);
-    const allResults: Record<string, any> = {};
-    let totalFindings = 0;
-    const severityCounts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
 
-    toast({ title: "Enterprise VAPT Started", description: `Scanning ${host} with ${enabledModules.length} modules` });
+    toast({ title: "Enterprise VAPT Started", description: `Real-data scan on ${host} with ${enabledModules.length} modules` });
 
-    for (let i = 0; i < enabledModules.length; i++) {
-      if (isPaused) break;
+    // Update module status to scanning
+    setModules(prev => prev.map(m => m.enabled ? { ...m, status: 'scanning' } : m));
+    setCurrentPhase('Initializing real-data scan...');
+    setOverallProgress(10);
 
-      const module = enabledModules[i];
-      const progress = ((i + 1) / enabledModules.length) * 100;
-      setOverallProgress(progress);
-      setCurrentPhase(`${module.name} (${i + 1}/${enabledModules.length})`);
-
-      // Update module status
-      setModules(prev => prev.map(m => m.id === module.id ? { ...m, status: 'scanning' } : m));
-
-      const scanId = await logScan({ module: module.id, scanType: `Enterprise VAPT - ${module.name}`, target: host });
-      const startTime = Date.now();
-
-      try {
-        const result = await executeModuleScan(module, host, url);
-        const duration = Date.now() - startTime;
-        allResults[module.id] = result;
-
-        // Extract findings count
-        let findingsCount = 0;
-        if (result.findings) findingsCount = result.findings.length;
-        else if (result.ports) findingsCount = result.ports.length;
-        else if (result.vulnerabilities) findingsCount = result.vulnerabilities.length;
-        totalFindings += findingsCount;
-
-        // Count severities
-        if (result.summary) {
-          severityCounts.critical += result.summary.critical || 0;
-          severityCounts.high += result.summary.high || 0;
-          severityCounts.medium += result.summary.medium || 0;
-          severityCounts.low += result.summary.low || 0;
+    try {
+      // Call the enterprise-vapt edge function for real scanning
+      const response = await supabase.functions.invoke('enterprise-vapt', {
+        body: {
+          target: url,
+          modules: enabledModules.map(m => m.id),
+          deep: true,
+          retryWithNewPayloads: aiLearningEnabled
         }
-
-        // Calculate confidence scores if AI learning enabled
-        if (aiLearningEnabled && result.findings) {
-          for (const finding of result.findings.slice(0, 10)) {
-            const confidence = await calculateConfidenceScore(finding, module.id);
-            if (!falsePositiveReduction || confidence.falsePositiveProbability < 50) {
-              setConfidenceScores(prev => [...prev, confidence]);
-            }
-          }
-        }
-
-        // Update module status
-        setModules(prev => prev.map(m => m.id === module.id ? { 
-          ...m, 
-          status: 'completed', 
-          findings: findingsCount,
-          duration 
-        } : m));
-
-        if (scanId) {
-          await completeScan(scanId, { status: 'completed', findingsCount, report: result });
-        }
-
-        // Add deep scan result
-        setDeepScanResults(prev => [...prev, {
-          layer: module.name,
-          findings: result.findings || result.ports || [],
-          correlations: [],
-          attackPaths: []
-        }]);
-
-      } catch (error: any) {
-        console.error(`${module.name} scan error:`, error);
-        setModules(prev => prev.map(m => m.id === module.id ? { ...m, status: 'failed' } : m));
-        if (scanId) {
-          await completeScan(scanId, { status: 'failed' });
-        }
-      }
-    }
-
-    // Auto-correlate findings
-    if (autoCorrelation) {
-      setCurrentPhase('Correlating findings and identifying attack paths...');
-      const { correlations, attackPaths } = correlateFindings(allResults);
-      
-      if (attackPaths.length > 0) {
-        setDeepScanResults(prev => [{
-          layer: 'Attack Path Analysis',
-          findings: [],
-          correlations,
-          attackPaths
-        }, ...prev]);
-      }
-    }
-
-    setScanStats({
-      total: totalFindings,
-      ...severityCounts
-    });
-
-    // Create alerts for critical findings
-    if (severityCounts.critical > 0) {
-      await createAlert({
-        type: 'critical_vulnerability',
-        severity: 'critical',
-        title: `Critical vulnerabilities found on ${host}`,
-        description: `Enterprise VAPT detected ${severityCounts.critical} critical issues`,
-        sourceModule: 'enterprise_vapt',
-        target: host
       });
-    }
 
-    // Save comprehensive report
-    await saveReport({
-      module: 'enterprise_vapt',
-      title: `Enterprise VAPT - ${host}`,
-      summary: `Total: ${totalFindings} findings | Critical: ${severityCounts.critical} | High: ${severityCounts.high} | Medium: ${severityCounts.medium}`,
-      findings: allResults,
-      severityCounts,
-      recommendations: {
-        immediate: severityCounts.critical > 0 ? ['Address critical vulnerabilities immediately'] : [],
-        shortTerm: severityCounts.high > 0 ? ['Remediate high-severity issues within 7 days'] : [],
-        longTerm: ['Implement continuous security monitoring', 'Regular penetration testing schedule']
+      if (response.error) {
+        throw new Error(response.error.message);
       }
-    });
 
-    setIsScanning(false);
-    setCurrentPhase('');
-    setOverallProgress(100);
+      const data = response.data;
+      setOverallProgress(80);
+      setCurrentPhase('Processing results...');
 
-    toast({ 
-      title: "Enterprise VAPT Complete", 
-      description: `Found ${totalFindings} findings across ${enabledModules.length} modules` 
-    });
+      // Process findings by module
+      const allFindings = data.findings || [];
+      const severityCounts = data.summary || { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+
+      // Update modules with real findings
+      setModules(prev => prev.map(m => {
+        const moduleFindings = allFindings.filter((f: any) => 
+          f.id?.toLowerCase().startsWith(m.id.slice(0, 3).toLowerCase()) ||
+          f.endpoint?.includes(m.id)
+        );
+        return {
+          ...m,
+          status: m.enabled ? 'completed' : 'idle',
+          findings: m.enabled ? moduleFindings.length : 0
+        };
+      }));
+
+      // Add deep scan results
+      const reconResult = {
+        layer: 'Reconnaissance',
+        findings: data.recon?.endpoints?.map((e: string) => ({ title: e, type: 'endpoint' })) || [],
+        correlations: [],
+        attackPaths: []
+      };
+
+      const findingsResult = {
+        layer: 'Security Findings',
+        findings: allFindings,
+        correlations: data.correlations || [],
+        attackPaths: data.attackPaths || []
+      };
+
+      setDeepScanResults([reconResult, findingsResult]);
+
+      // Generate AI confidence scores for findings
+      if (aiLearningEnabled && allFindings.length > 0) {
+        const scores = allFindings.slice(0, 15).map((f: any) => ({
+          findingId: f.id || crypto.randomUUID(),
+          score: f.confidence || 80,
+          factors: {
+            exploitability: f.cvss ? f.cvss * 10 : 70,
+            businessImpact: f.severity === 'critical' ? 95 : f.severity === 'high' ? 80 : 60,
+            assetCriticality: 75,
+            exposureLevel: 70,
+            complianceRisk: f.cwe ? 85 : 60
+          },
+          aiReasoning: `Real finding from ${f.endpoint || target}. ${f.evidence || ''}`,
+          falsePositiveProbability: 100 - (f.confidence || 80)
+        }));
+        
+        if (!falsePositiveReduction) {
+          setConfidenceScores(scores);
+        } else {
+          setConfidenceScores(scores.filter((s: any) => s.falsePositiveProbability < 40));
+        }
+      }
+
+      setScanStats({
+        total: allFindings.length,
+        critical: severityCounts.critical || 0,
+        high: severityCounts.high || 0,
+        medium: severityCounts.medium || 0,
+        low: severityCounts.low || 0,
+        info: severityCounts.info || 0
+      });
+
+      // Create alerts for critical findings
+      if (severityCounts.critical > 0) {
+        await createAlert({
+          type: 'critical_vulnerability',
+          severity: 'critical',
+          title: `Critical vulnerabilities found on ${host}`,
+          description: `Enterprise VAPT detected ${severityCounts.critical} critical issues with real payloads`,
+          sourceModule: 'enterprise_vapt',
+          target: host
+        });
+      }
+
+      setOverallProgress(100);
+      setCurrentPhase('');
+
+      toast({ 
+        title: "Enterprise VAPT Complete", 
+        description: `Found ${allFindings.length} real vulnerabilities across ${enabledModules.length} modules` 
+      });
+
+    } catch (error: any) {
+      console.error('Enterprise VAPT error:', error);
+      setModules(prev => prev.map(m => ({ ...m, status: 'failed' })));
+      toast({ 
+        title: "Scan Failed", 
+        description: error.message || 'Unknown error occurred', 
+        variant: "destructive" 
+      });
+    } finally {
+      setIsScanning(false);
+    }
   };
 
   const getCategoryIcon = (category: string) => {
