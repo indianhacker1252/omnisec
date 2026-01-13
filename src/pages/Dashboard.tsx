@@ -31,6 +31,9 @@ import {
   Layers,
   TrendingUp,
   Eye,
+  Shield,
+  FileText,
+  ClipboardCheck,
 } from "lucide-react";
 
 const Dashboard = () => {
@@ -163,6 +166,27 @@ const Dashboard = () => {
       icon: GraduationCap,
       status: "active" as const,
       path: "/vapt-learning",
+    },
+    {
+      title: "Scope Validator",
+      description: "Enterprise authorization & engagement scope configuration",
+      icon: ClipboardCheck,
+      status: "active" as const,
+      path: "/scope-validator",
+    },
+    {
+      title: "Enterprise VAPT",
+      description: "AI-powered unified security assessment across all technologies",
+      icon: Shield,
+      status: "active" as const,
+      path: "/enterprise-vapt",
+    },
+    {
+      title: "PDF Reports",
+      description: "Generate professional PDF security assessment reports",
+      icon: FileText,
+      status: "active" as const,
+      path: "/pdf-reports",
     },
     {
       title: "Security Reports",
