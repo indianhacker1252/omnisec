@@ -68,3 +68,6 @@ verify_jwt = false
 
 [functions.enterprise-vapt]
 verify_jwt = false
+
+[functions.autonomous-vapt]
+verify_jwt = false
