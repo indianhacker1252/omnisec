@@ -32,6 +32,7 @@ import NotFound from "./pages/NotFound";
 import ScopeValidatorPage from "./pages/ScopeValidatorPage";
 import EnterpriseVAPTPage from "./pages/EnterpriseVAPTPage";
 import PDFReportsPage from "./pages/PDFReportsPage";
+import UnifiedVAPTPage from "./pages/UnifiedVAPTPage";
 
 const queryClient = new QueryClient();
 
@@ -220,6 +221,7 @@ const App = () => (
           <Route path="/scope-validator" element={<ProtectedRoute><ScopeValidatorPage /></ProtectedRoute>} />
           <Route path="/enterprise-vapt" element={<ProtectedRoute><EnterpriseVAPTPage /></ProtectedRoute>} />
           <Route path="/pdf-reports" element={<ProtectedRoute><PDFReportsPage /></ProtectedRoute>} />
+          <Route path="/unified-vapt" element={<ProtectedRoute><UnifiedVAPTPage /></ProtectedRoute>} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>

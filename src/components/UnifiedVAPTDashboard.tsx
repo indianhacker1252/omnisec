@@ -104,6 +104,9 @@ export const UnifiedVAPTDashboard = () => {
   const [currentPhase, setCurrentPhase] = useState('');
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
+  const [liveFindings, setLiveFindings] = useState(0);
+  const [liveEndpoints, setLiveEndpoints] = useState(0);
+  const [currentEndpoint, setCurrentEndpoint] = useState('');
   
   // AI Settings
   const [enableLearning, setEnableLearning] = useState(true);
@@ -119,9 +122,47 @@ export const UnifiedVAPTDashboard = () => {
     accuracy: 0
   });
 
+  // Realtime subscription for scan progress
+  const [scanId, setScanId] = useState<string | null>(null);
+
   useEffect(() => {
     loadLearningStats();
   }, []);
+
+  useEffect(() => {
+    if (!isScanning) return;
+
+    const channel = supabase
+      .channel('scan-progress-live')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'scan_progress',
+        },
+        (payload: any) => {
+          const data = payload.new;
+          setProgress(data.progress || 0);
+          setCurrentPhase(data.message || data.phase || '');
+          setLiveFindings(data.findings_so_far || 0);
+          setLiveEndpoints(data.endpoints_discovered || 0);
+          if (data.current_endpoint) setCurrentEndpoint(data.current_endpoint);
+
+          if (data.phase === 'complete') {
+            toast({
+              title: "Phase Complete",
+              description: data.message,
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [isScanning]);
 
   const loadLearningStats = async () => {
     try {
@@ -160,30 +201,12 @@ export const UnifiedVAPTDashboard = () => {
 
     setIsScanning(true);
     setProgress(0);
+    setLiveFindings(0);
+    setLiveEndpoints(0);
+    setCurrentEndpoint('');
     setScanResult(null);
     setSelectedFinding(null);
-
-    const phases = [
-      'Initializing autonomous scanner...',
-      'Discovering endpoints & subdomains...',
-      'Fingerprinting target technologies...',
-      'Running vulnerability assessments...',
-      'Performing deep injection tests...',
-      'Testing authentication mechanisms...',
-      'Analyzing business logic...',
-      'AI correlation & attack path analysis...',
-      'Generating POC exploits...',
-      'Reducing false positives via AI...'
-    ];
-
-    let phaseIndex = 0;
-    const phaseInterval = setInterval(() => {
-      if (phaseIndex < phases.length) {
-        setCurrentPhase(phases[phaseIndex]);
-        setProgress(Math.min(10 + phaseIndex * 9, 90));
-        phaseIndex++;
-      }
-    }, 2000);
+    setCurrentPhase('Initializing autonomous scanner...');
 
     try {
       const response = await supabase.functions.invoke('autonomous-vapt', {
@@ -198,8 +221,6 @@ export const UnifiedVAPTDashboard = () => {
         }
       });
 
-      clearInterval(phaseInterval);
-
       if (response.error) {
         throw new Error(response.error.message);
       }
@@ -209,7 +230,6 @@ export const UnifiedVAPTDashboard = () => {
       setProgress(100);
       setCurrentPhase('Scan complete!');
 
-      // Reload learning stats
       await loadLearningStats();
 
       toast({
@@ -218,7 +238,6 @@ export const UnifiedVAPTDashboard = () => {
       });
 
     } catch (error: any) {
-      clearInterval(phaseInterval);
       console.error('Autonomous VAPT error:', error);
       toast({
         title: "Scan Failed",
@@ -365,7 +384,7 @@ export const UnifiedVAPTDashboard = () => {
 
         {/* Progress */}
         {isScanning && (
-          <div className="mt-6">
+          <div className="mt-6 space-y-3">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-medium flex items-center gap-2">
                 <Activity className="h-4 w-4 animate-pulse" />
@@ -374,6 +393,19 @@ export const UnifiedVAPTDashboard = () => {
               <span className="text-sm text-muted-foreground">{progress}%</span>
             </div>
             <Progress value={progress} className="h-3" />
+            <div className="flex items-center gap-6 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <Globe className="h-3 w-3" /> {liveEndpoints} endpoints discovered
+              </span>
+              <span className="flex items-center gap-1">
+                <Bug className="h-3 w-3" /> {liveFindings} findings so far
+              </span>
+              {currentEndpoint && (
+                <span className="flex items-center gap-1 truncate max-w-xs">
+                  <Target className="h-3 w-3" /> {currentEndpoint}
+                </span>
+              )}
+            </div>
           </div>
         )}
       </Card>

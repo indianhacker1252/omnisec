@@ -95,22 +95,51 @@ serve(async (req) => {
     const allFindings: Finding[] = [];
     const discoveredEndpoints: string[] = [];
     const learningData: LearningData[] = [];
+    const scanId = crypto.randomUUID();
+
+    // Helper to emit real-time progress
+    const emitProgress = async (phase: string, phaseNumber: number, progress: number, message: string, extra: any = {}) => {
+      try {
+        await supabase.from('scan_progress').insert({
+          scan_id: scanId,
+          phase,
+          phase_number: phaseNumber,
+          total_phases: 10,
+          progress,
+          message,
+          findings_so_far: extra.findings || allFindings.length,
+          endpoints_discovered: extra.endpoints || discoveredEndpoints.length,
+          current_endpoint: extra.currentEndpoint || null
+        });
+      } catch (e) { console.log('Progress emit error:', e); }
+    };
 
     // Phase 1: Comprehensive Endpoint Discovery
     console.log('[Phase 1] Endpoint Discovery...');
+    await emitProgress('discovery', 1, 5, 'Discovering endpoints & subdomains...');
     const discoveryResults = await discoverEndpoints(targetUrl, SHODAN_API_KEY, maxDepth);
     discoveredEndpoints.push(...discoveryResults.endpoints);
     console.log(`[Phase 1] Discovered ${discoveredEndpoints.length} endpoints`);
+    await emitProgress('discovery', 1, 15, `Discovered ${discoveredEndpoints.length} endpoints`, { endpoints: discoveredEndpoints.length });
 
     // Phase 2: Fingerprinting & Technology Detection
     console.log('[Phase 2] Fingerprinting...');
+    await emitProgress('fingerprint', 2, 20, 'Fingerprinting target technologies...');
     const fingerprint = await fingerprintTarget(targetUrl, discoveryResults);
+    await emitProgress('fingerprint', 2, 25, `Detected: ${fingerprint.technologies?.join(', ') || 'analyzing...'}`);
 
     // Phase 3: Vulnerability Assessment on ALL discovered endpoints
     console.log('[Phase 3] Vulnerability Assessment...');
+    await emitProgress('vuln_assessment', 3, 30, 'Starting vulnerability assessment on all endpoints...');
     const previousPayloads = await getFailedPayloads(supabase, targetUrl.hostname);
     
-    for (const endpoint of discoveredEndpoints.slice(0, 100)) {
+    const endpointsToTest = discoveredEndpoints.slice(0, 100);
+    for (let i = 0; i < endpointsToTest.length; i++) {
+      const endpoint = endpointsToTest[i];
+      if (i % 5 === 0) {
+        await emitProgress('vuln_assessment', 3, 30 + Math.round((i / endpointsToTest.length) * 15), 
+          `Testing endpoint ${i + 1}/${endpointsToTest.length}`, { currentEndpoint: endpoint });
+      }
       const endpointFindings = await assessEndpoint(
         endpoint, 
         fingerprint, 
@@ -123,6 +152,7 @@ serve(async (req) => {
 
     // Phase 4: Deep Injection Testing
     console.log('[Phase 4] Deep Injection Testing...');
+    await emitProgress('injection', 4, 50, `Running deep injection tests on ${discoveryResults.forms?.length || 0} forms...`);
     const injectionFindings = await performDeepInjectionTest(
       targetUrl,
       discoveryResults.forms,
@@ -132,19 +162,23 @@ serve(async (req) => {
       retryWithAI
     );
     allFindings.push(...injectionFindings);
+    await emitProgress('injection', 4, 58, `Injection testing complete. ${allFindings.length} findings so far.`);
 
     // Phase 5: Authentication & Authorization Testing
     console.log('[Phase 5] Auth Testing...');
+    await emitProgress('auth', 5, 60, 'Testing authentication & authorization mechanisms...');
     const authFindings = await testAuthentication(targetUrl, discoveryResults.authEndpoints);
     allFindings.push(...authFindings);
 
     // Phase 6: Business Logic Testing
     console.log('[Phase 6] Business Logic Testing...');
+    await emitProgress('business_logic', 6, 68, 'Analyzing business logic for vulnerabilities...');
     const businessFindings = await testBusinessLogic(targetUrl, discoveryResults.workflows);
     allFindings.push(...businessFindings);
 
     // Phase 7: AI Correlation & Attack Path Analysis
     console.log('[Phase 7] AI Correlation...');
+    await emitProgress('correlation', 7, 75, `AI correlating ${allFindings.length} findings for attack paths...`);
     const correlationResult = await performAICorrelation(
       allFindings,
       discoveryResults,
@@ -154,20 +188,25 @@ serve(async (req) => {
 
     // Phase 8: Generate POC for exploitable findings
     console.log('[Phase 8] POC Generation...');
+    const critHighFindings = allFindings.filter(f => f.severity === 'critical' || f.severity === 'high');
+    await emitProgress('poc', 8, 82, `Generating POC exploits for ${critHighFindings.length} critical/high findings...`);
     const findingsWithPOC = generatePOC ? 
-      await generateExploitPOC(allFindings.filter(f => f.severity === 'critical' || f.severity === 'high'), LOVABLE_API_KEY) :
+      await generateExploitPOC(critHighFindings, LOVABLE_API_KEY) :
       allFindings;
 
     // Phase 9: False Positive Reduction via AI
     console.log('[Phase 9] False Positive Analysis...');
+    await emitProgress('fp_reduction', 9, 90, 'AI analyzing for false positive reduction...');
     const verifiedFindings = enableLearning ?
       await reduceFalsePositives(findingsWithPOC, previousFindings, LOVABLE_API_KEY) :
       findingsWithPOC;
 
     // Phase 10: Save learning data for future improvements
+    await emitProgress('learning', 10, 95, 'Saving learning data for future improvement...');
     if (enableLearning) {
       await saveLearningData(supabase, targetUrl.hostname, verifiedFindings, learningData);
     }
+    await emitProgress('complete', 10, 100, `Scan complete! ${verifiedFindings.filter(f => !f.falsePositive).length} verified findings.`);
 
     // Calculate severity counts
     const severityCounts = {
@@ -255,7 +294,7 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
 
   try {
     // 1. Main page crawl
-    const mainPage = await fetchWithTimeout(target.toString(), 15000);
+    const mainPage = await fetchWithTimeout(target.toString(), 25000);
     if (mainPage.ok) {
       const html = await mainPage.text();
       results.headers = Object.fromEntries(mainPage.headers.entries());
@@ -337,20 +376,25 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
       '/upload', '/uploads', '/files', '/media', '/assets', '/static'
     ];
 
-    for (const path of commonPaths) {
-      try {
-        const testUrl = new URL(path, target).toString();
-        const response = await fetchWithTimeout(testUrl, 5000);
-        if (response.status === 200 || response.status === 301 || response.status === 302) {
-          results.endpoints.push(testUrl);
-          if (path.includes('api') || path.includes('graphql') || path.includes('rest')) {
-            results.apiEndpoints.push(testUrl);
+    // Batch parallel path discovery (10 at a time)
+    for (let i = 0; i < commonPaths.length; i += 10) {
+      const batch = commonPaths.slice(i, i + 10);
+      const promises = batch.map(async (path) => {
+        try {
+          const testUrl = new URL(path, target).toString();
+          const response = await fetchWithTimeout(testUrl, 4000);
+          if (response.status === 200 || response.status === 301 || response.status === 302) {
+            results.endpoints.push(testUrl);
+            if (path.includes('api') || path.includes('graphql') || path.includes('rest')) {
+              results.apiEndpoints.push(testUrl);
+            }
+            if (path.includes('login') || path.includes('auth') || path.includes('signin')) {
+              results.authEndpoints.push(testUrl);
+            }
           }
-          if (path.includes('login') || path.includes('auth') || path.includes('signin')) {
-            results.authEndpoints.push(testUrl);
-          }
-        }
-      } catch {}
+        } catch {}
+      });
+      await Promise.all(promises);
     }
 
     // 3. Shodan integration for host discovery

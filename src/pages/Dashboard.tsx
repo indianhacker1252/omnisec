@@ -23,7 +23,6 @@ import {
   Skull,
   Zap,
   Bot,
-  GraduationCap,
   Cloud,
   Key,
   Network,
@@ -31,7 +30,6 @@ import {
   Layers,
   TrendingUp,
   Eye,
-  Shield,
   FileText,
   ClipboardCheck,
 } from "lucide-react";
@@ -154,18 +152,11 @@ const Dashboard = () => {
       path: "/kali",
     },
     {
-      title: "Autonomous Attack",
-      description: "AI-powered self-learning penetration testing engine",
+      title: "Autonomous VAPT (XBOW-like)",
+      description: "AI-powered autonomous VAPT with endpoint discovery, exploit generation & self-learning",
       icon: Zap,
       status: "active" as const,
-      path: "/autonomous",
-    },
-    {
-      title: "Learning VAPT Assistant",
-      description: "AI-powered learning assistant that improves from your testing",
-      icon: GraduationCap,
-      status: "active" as const,
-      path: "/vapt-learning",
+      path: "/unified-vapt",
     },
     {
       title: "Scope Validator",
@@ -173,13 +164,6 @@ const Dashboard = () => {
       icon: ClipboardCheck,
       status: "active" as const,
       path: "/scope-validator",
-    },
-    {
-      title: "Enterprise VAPT",
-      description: "AI-powered unified security assessment across all technologies",
-      icon: Shield,
-      status: "active" as const,
-      path: "/enterprise-vapt",
     },
     {
       title: "PDF Reports",

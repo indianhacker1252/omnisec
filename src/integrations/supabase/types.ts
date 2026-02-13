@@ -56,6 +56,48 @@ export type Database = {
         }
         Relationships: []
       }
+      scan_progress: {
+        Row: {
+          created_at: string
+          current_endpoint: string | null
+          endpoints_discovered: number | null
+          findings_so_far: number | null
+          id: string
+          message: string | null
+          phase: string
+          phase_number: number
+          progress: number
+          scan_id: string
+          total_phases: number
+        }
+        Insert: {
+          created_at?: string
+          current_endpoint?: string | null
+          endpoints_discovered?: number | null
+          findings_so_far?: number | null
+          id?: string
+          message?: string | null
+          phase: string
+          phase_number?: number
+          progress?: number
+          scan_id: string
+          total_phases?: number
+        }
+        Update: {
+          created_at?: string
+          current_endpoint?: string | null
+          endpoints_discovered?: number | null
+          findings_so_far?: number | null
+          id?: string
+          message?: string | null
+          phase?: string
+          phase_number?: number
+          progress?: number
+          scan_id?: string
+          total_phases?: number
+        }
+        Relationships: []
+      }
       security_alerts: {
         Row: {
           cleared_at: string | null
