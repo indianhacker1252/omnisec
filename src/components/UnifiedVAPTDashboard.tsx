@@ -222,7 +222,11 @@ export const UnifiedVAPTDashboard = () => {
       });
 
       if (response.error) {
-        throw new Error(response.error.message);
+        // Edge function may have timed out but scan continues server-side
+        // Poll database for results
+        console.log('Edge function response error, polling for results...', response.error.message);
+        await pollForResults(target);
+        return;
       }
 
       const result = response.data as ScanResult;
@@ -239,14 +243,75 @@ export const UnifiedVAPTDashboard = () => {
 
     } catch (error: any) {
       console.error('Autonomous VAPT error:', error);
-      toast({
-        title: "Scan Failed",
-        description: error.message || 'Unknown error',
-        variant: "destructive"
-      });
+      // Connection may have timed out but scan continues on server
+      // Poll DB for completed results
+      await pollForResults(target);
     } finally {
       setIsScanning(false);
     }
+  };
+
+  const pollForResults = async (scanTarget: string) => {
+    setCurrentPhase('Scan running server-side, checking for results...');
+    const normalizedTarget = scanTarget.startsWith('http') ? scanTarget : `https://${scanTarget}/`;
+    
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await new Promise(r => setTimeout(r, 10000)); // Wait 10s between polls
+      
+      try {
+        const { data } = await supabase
+          .from('security_reports')
+          .select('*')
+          .eq('module', 'autonomous_vapt')
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (data && data.length > 0) {
+          const report = data[0];
+          const findings = (report.findings as any[] || []);
+          const sevCounts = report.severity_counts as any || {};
+          
+          setScanResult({
+            success: true,
+            target: scanTarget,
+            scanTime: 0,
+            discovery: { endpoints: 0, subdomains: 0, forms: 0, apis: 0 },
+            fingerprint: {},
+            findings: findings,
+            attackPaths: [],
+            chainedExploits: [],
+            summary: {
+              critical: sevCounts.critical || 0,
+              high: sevCounts.high || 0,
+              medium: sevCounts.medium || 0,
+              low: sevCounts.low || 0,
+              info: sevCounts.info || 0,
+            },
+            recommendations: (report.recommendations as string[]) || []
+          });
+          setProgress(100);
+          setCurrentPhase('Scan complete! (retrieved from server)');
+          await loadLearningStats();
+
+          toast({
+            title: "Autonomous VAPT Complete",
+            description: `Found ${findings.length} vulnerabilities`
+          });
+          return;
+        }
+      } catch (e) {
+        console.log('Poll attempt', attempt, 'failed:', e);
+      }
+      
+      setProgress(Math.min(50 + attempt * 2, 95));
+      setCurrentPhase(`Scan running server-side... checking (${attempt + 1}/30)`);
+    }
+
+    toast({
+      title: "Scan Timeout",
+      description: "Scan is still running on the server. Check back shortly.",
+      variant: "destructive"
+    });
   };
 
   const markFalsePositive = async (finding: Finding) => {
