@@ -253,23 +253,36 @@ export const UnifiedVAPTDashboard = () => {
 
   const pollForResults = async (scanTarget: string) => {
     setCurrentPhase('Scan running server-side, checking for results...');
-    const normalizedTarget = scanTarget.startsWith('http') ? scanTarget : `https://${scanTarget}/`;
+    // Extract clean domain for matching
+    const cleanDomain = scanTarget.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
+    const pollStartTime = new Date().toISOString();
     
     for (let attempt = 0; attempt < 30; attempt++) {
-      await new Promise(r => setTimeout(r, 10000)); // Wait 10s between polls
+      await new Promise(r => setTimeout(r, 10000));
       
       try {
-        const { data } = await supabase
-          .from('security_reports')
-          .select('*')
-          .eq('module', 'autonomous_vapt')
+        // First check scan_history for a completed scan matching this target
+        const { data: scans } = await supabase
+          .from('scan_history')
+          .select('id, target, status, findings_count')
+          .or(`target.ilike.%${cleanDomain}%`)
+          .eq('status', 'completed')
           .order('created_at', { ascending: false })
           .limit(1);
 
-        if (data && data.length > 0) {
-          const report = data[0];
-          const findings = (report.findings as any[] || []);
-          const sevCounts = report.severity_counts as any || {};
+        if (scans && scans.length > 0) {
+          const scan = scans[0];
+          
+          // Now get the security report linked to this scan
+          const { data: reports } = await supabase
+            .from('security_reports')
+            .select('*')
+            .eq('scan_id', scan.id)
+            .limit(1);
+
+          const report = reports?.[0];
+          const findings = (report?.findings as any[] || []);
+          const sevCounts = (report?.severity_counts as any) || {};
           
           setScanResult({
             success: true,
@@ -277,7 +290,7 @@ export const UnifiedVAPTDashboard = () => {
             scanTime: 0,
             discovery: { endpoints: 0, subdomains: 0, forms: 0, apis: 0 },
             fingerprint: {},
-            findings: findings,
+            findings,
             attackPaths: [],
             chainedExploits: [],
             summary: {
@@ -287,7 +300,7 @@ export const UnifiedVAPTDashboard = () => {
               low: sevCounts.low || 0,
               info: sevCounts.info || 0,
             },
-            recommendations: (report.recommendations as string[]) || []
+            recommendations: (report?.recommendations as string[]) || []
           });
           setProgress(100);
           setCurrentPhase('Scan complete! (retrieved from server)');
@@ -295,7 +308,7 @@ export const UnifiedVAPTDashboard = () => {
 
           toast({
             title: "Autonomous VAPT Complete",
-            description: `Found ${findings.length} vulnerabilities`
+            description: `Found ${findings.length} vulnerabilities for ${cleanDomain}`
           });
           return;
         }
