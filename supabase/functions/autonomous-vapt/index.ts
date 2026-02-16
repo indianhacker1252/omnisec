@@ -336,7 +336,7 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
 
   try {
     // 1. Main page crawl
-    const mainPage = await fetchWithTimeout(target.toString(), 25000);
+    const mainPage = await fetchWithTimeout(target.toString(), 30000);
     if (mainPage.ok) {
       const html = await mainPage.text();
       results.headers = Object.fromEntries(mainPage.headers.entries());
@@ -555,7 +555,7 @@ async function getFailedPayloads(supabase: any, hostname: string): Promise<strin
   }
 }
 
-// Assess individual endpoint
+// Assess individual endpoint - now with parameter-based XSS/SQLi probing
 async function assessEndpoint(
   endpoint: string,
   fingerprint: any,
@@ -566,14 +566,14 @@ async function assessEndpoint(
   const findings: Finding[] = [];
 
   try {
-    const response = await fetchWithTimeout(endpoint, 10000);
+    const response = await fetchWithTimeout(endpoint, 15000);
     const status = response.status;
+    const responseText = await response.text();
     const contentType = response.headers.get('content-type') || '';
     
     // Check for sensitive file exposure
     if (endpoint.includes('.git') || endpoint.includes('.env') || endpoint.includes('config')) {
       if (status === 200) {
-        const body = await response.text();
         findings.push({
           id: `EXPOSURE-${Date.now()}`,
           severity: 'critical',
@@ -581,7 +581,7 @@ async function assessEndpoint(
           description: 'Critical configuration or version control file accessible',
           endpoint,
           method: 'GET',
-          evidence: `HTTP ${status}, Content: ${body.slice(0, 200)}`,
+          evidence: `HTTP ${status}, Content: ${responseText.slice(0, 200)}`,
           remediation: 'Block access to sensitive files via web server configuration',
           cwe: 'CWE-200',
           cvss: 9.0,
@@ -631,22 +631,187 @@ async function assessEndpoint(
       }
     }
 
-    // Check security headers
-    const securityHeaders = ['x-frame-options', 'content-security-policy', 'strict-transport-security', 'x-content-type-options'];
-    for (const header of securityHeaders) {
-      if (!response.headers.get(header)) {
-        findings.push({
-          id: `HDR-${header.toUpperCase().replace(/-/g, '')}-${Date.now()}`,
-          severity: 'low',
-          title: `Missing ${header.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('-')} Header`,
-          description: `Security header ${header} not present`,
-          endpoint,
-          evidence: 'Header missing from response',
-          remediation: `Add ${header} header to all responses`,
-          cwe: 'CWE-16',
-          confidence: 100
-        });
+    // Check security headers (only on the main endpoint, skip duplicates)
+    if (endpoint === fingerprint?.hostname || !endpoint.includes('?')) {
+      const securityHeaders = ['x-frame-options', 'content-security-policy', 'strict-transport-security', 'x-content-type-options'];
+      for (const header of securityHeaders) {
+        if (!response.headers.get(header)) {
+          findings.push({
+            id: `HDR-${header.toUpperCase().replace(/-/g, '')}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+            severity: 'low',
+            title: `Missing ${header.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('-')} Header`,
+            description: `Security header ${header} not present`,
+            endpoint,
+            evidence: 'Header missing from response',
+            remediation: `Add ${header} header to all responses`,
+            cwe: 'CWE-16',
+            confidence: 100
+          });
+        }
       }
+    }
+
+    // Server/technology disclosure
+    const serverHeader = response.headers.get('server');
+    const xPoweredBy = response.headers.get('x-powered-by');
+    if (serverHeader && !findings.some(f => f.id.startsWith('SVR-'))) {
+      findings.push({
+        id: `SVR-DISC-${Date.now()}`,
+        severity: 'low',
+        title: `Server Version Disclosure: ${serverHeader}`,
+        description: `Server header reveals technology: "${serverHeader}"`,
+        endpoint,
+        evidence: `Server: ${serverHeader}`,
+        remediation: 'Remove or obfuscate the Server header',
+        cwe: 'CWE-200',
+        confidence: 100
+      });
+    }
+    if (xPoweredBy) {
+      findings.push({
+        id: `TECH-DISC-${Date.now()}`,
+        severity: 'low',
+        title: `Technology Stack Disclosure: ${xPoweredBy}`,
+        description: `X-Powered-By header reveals: "${xPoweredBy}"`,
+        endpoint,
+        evidence: `X-Powered-By: ${xPoweredBy}`,
+        remediation: 'Remove the X-Powered-By header',
+        cwe: 'CWE-200',
+        confidence: 100
+      });
+    }
+
+    // === Parameter-based vulnerability probing ===
+    // Extract query params from the endpoint URL itself
+    try {
+      const parsedUrl = new URL(endpoint);
+      const params = Array.from(parsedUrl.searchParams.keys());
+      
+      if (params.length > 0) {
+        // XSS probe on each parameter
+        const xssProbe = '"><img src=x onerror=alert(1)>';
+        for (const param of params.slice(0, 5)) {
+          try {
+            const testUrl = new URL(endpoint);
+            testUrl.searchParams.set(param, xssProbe);
+            const xssResp = await fetchWithTimeout(testUrl.toString(), 10000);
+            const xssBody = await xssResp.text();
+            if (xssBody.includes(xssProbe) || xssBody.includes('onerror=alert')) {
+              findings.push({
+                id: `XSS-REFLECT-${Date.now()}-${param}`,
+                severity: 'high',
+                title: `Reflected XSS in parameter "${param}"`,
+                description: `Parameter "${param}" reflects user input without sanitization, enabling script execution`,
+                endpoint: testUrl.toString(),
+                method: 'GET',
+                payload: xssProbe,
+                evidence: 'Payload reflected in response body',
+                response: xssBody.slice(0, 500),
+                remediation: 'Implement output encoding and Content-Security-Policy',
+                cwe: 'CWE-79',
+                cvss: 6.1,
+                mitre: ['T1059.007'],
+                confidence: 90,
+                poc: `curl "${testUrl.toString()}"`
+              });
+            }
+          } catch {}
+        }
+
+        // SQLi probe on each parameter
+        const sqliProbe = "' OR '1'='1' --";
+        for (const param of params.slice(0, 5)) {
+          try {
+            const testUrl = new URL(endpoint);
+            testUrl.searchParams.set(param, sqliProbe);
+            const sqliResp = await fetchWithTimeout(testUrl.toString(), 10000);
+            const sqliBody = await sqliResp.text();
+            const sqlErrors = ['sql syntax', 'mysql', 'postgresql', 'sqlite', 'oracle', 'sql error', 'odbc', 'jdbc', 'syntax error', 'unclosed quotation', 'warning:'];
+            const hasError = sqlErrors.some(err => sqliBody.toLowerCase().includes(err));
+            
+            // Also check for different response length (boolean-based SQLi)
+            const normalUrl = new URL(endpoint);
+            const normalResp = await fetchWithTimeout(normalUrl.toString(), 10000);
+            const normalBody = await normalResp.text();
+            const lengthDiff = Math.abs(sqliBody.length - normalBody.length);
+            
+            if (hasError) {
+              findings.push({
+                id: `SQLI-PARAM-${Date.now()}-${param}`,
+                severity: 'critical',
+                title: `SQL Injection in parameter "${param}"`,
+                description: `Database error exposed when injecting SQL into parameter "${param}"`,
+                endpoint: testUrl.toString(),
+                method: 'GET',
+                payload: sqliProbe,
+                evidence: 'SQL error in response',
+                response: sqliBody.slice(0, 500),
+                remediation: 'Use parameterized queries / prepared statements',
+                cwe: 'CWE-89',
+                cvss: 9.8,
+                mitre: ['T1190'],
+                confidence: 92,
+                poc: `curl "${testUrl.toString()}"`,
+                exploitCode: `# SQLi exploit\nimport requests\nurl = "${testUrl.toString()}"\nresp = requests.get(url)\nprint(resp.text[:500])`
+              });
+            } else if (lengthDiff > 200) {
+              findings.push({
+                id: `SQLI-BOOL-${Date.now()}-${param}`,
+                severity: 'high',
+                title: `Potential Boolean-based SQL Injection in "${param}"`,
+                description: `Parameter "${param}" shows significantly different response with SQL payload (${lengthDiff} bytes difference)`,
+                endpoint: testUrl.toString(),
+                method: 'GET',
+                payload: sqliProbe,
+                evidence: `Response length difference: ${lengthDiff} bytes`,
+                remediation: 'Use parameterized queries',
+                cwe: 'CWE-89',
+                cvss: 8.6,
+                mitre: ['T1190'],
+                confidence: 70,
+                poc: `curl "${testUrl.toString()}"`
+              });
+            }
+          } catch {}
+        }
+      }
+    } catch {}
+
+    // === Detect common vuln patterns in page content ===
+    // Check for directory listing
+    if (responseText.includes('Index of /') || responseText.includes('Directory listing') || 
+        responseText.includes('<title>Index of')) {
+      findings.push({
+        id: `DIRLIST-${Date.now()}`,
+        severity: 'medium',
+        title: 'Directory Listing Enabled',
+        description: 'Web server exposes directory contents, potentially revealing sensitive files',
+        endpoint,
+        method: 'GET',
+        evidence: 'Directory listing HTML detected',
+        remediation: 'Disable directory listing in web server configuration',
+        cwe: 'CWE-548',
+        confidence: 95,
+        poc: `curl "${endpoint}"`
+      });
+    }
+
+    // Check for error messages leaking info
+    if (responseText.match(/(?:fatal error|stack trace|exception|traceback|debug)/i) && status >= 400) {
+      findings.push({
+        id: `INFO-LEAK-${Date.now()}`,
+        severity: 'medium',
+        title: 'Verbose Error Messages / Stack Traces',
+        description: 'Application exposes detailed error information that could aid attackers',
+        endpoint,
+        method: 'GET',
+        evidence: 'Error/stack trace patterns detected in response',
+        response: responseText.slice(0, 300),
+        remediation: 'Implement custom error pages, disable debug mode in production',
+        cwe: 'CWE-209',
+        confidence: 85,
+        poc: `curl "${endpoint}"`
+      });
     }
 
   } catch {}
@@ -888,7 +1053,7 @@ async function testAuthentication(target: URL, authEndpoints: string[]): Promise
       const responses: string[] = [];
       for (const cred of testCredentials) {
         try {
-          const response = await fetchWithTimeout(endpoint, 10000, {
+      const response = await fetchWithTimeout(endpoint, 15000, {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: `username=${cred.user}&password=${cred.pass}`
