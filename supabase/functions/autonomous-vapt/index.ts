@@ -97,6 +97,38 @@ serve(async (req) => {
     const learningData: LearningData[] = [];
     const scanId = crypto.randomUUID();
 
+    // Helper to save current results to DB (can be called at any point)
+    const saveResultsToDB = async (status: string, extraFindings: Finding[] = allFindings) => {
+      const findings = extraFindings.filter(f => !f.falsePositive);
+      const severityCounts = {
+        critical: findings.filter(f => f.severity === 'critical').length,
+        high: findings.filter(f => f.severity === 'high').length,
+        medium: findings.filter(f => f.severity === 'medium').length,
+        low: findings.filter(f => f.severity === 'low').length,
+        info: findings.filter(f => f.severity === 'info').length
+      };
+      try {
+        await supabase.from('scan_history').insert({
+          module: 'autonomous_vapt',
+          scan_type: 'Autonomous VAPT - Full Red Team Assessment',
+          target: targetUrl.toString(),
+          status,
+          findings_count: findings.length,
+          duration_ms: Date.now() - startTime,
+          report: { findings }
+        });
+        await supabase.from('security_reports').insert({
+          module: 'autonomous_vapt',
+          title: `Autonomous VAPT - ${targetUrl.hostname}`,
+          summary: `Found ${findings.length} issues: ${severityCounts.critical} critical, ${severityCounts.high} high`,
+          findings,
+          severity_counts: severityCounts,
+          recommendations: []
+        });
+      } catch (e) { console.error('DB save error:', e); }
+      return { severityCounts, findings };
+    };
+
     // Helper to emit real-time progress
     const emitProgress = async (phase: string, phaseNumber: number, progress: number, message: string, extra: any = {}) => {
       try {
@@ -114,159 +146,169 @@ serve(async (req) => {
       } catch (e) { console.log('Progress emit error:', e); }
     };
 
-    // Phase 1: Comprehensive Endpoint Discovery
-    console.log('[Phase 1] Endpoint Discovery...');
-    await emitProgress('discovery', 1, 5, 'Discovering endpoints & subdomains...');
-    const discoveryResults = await discoverEndpoints(targetUrl, SHODAN_API_KEY, maxDepth);
-    discoveredEndpoints.push(...discoveryResults.endpoints);
-    console.log(`[Phase 1] Discovered ${discoveredEndpoints.length} endpoints`);
-    await emitProgress('discovery', 1, 15, `Discovered ${discoveredEndpoints.length} endpoints`, { endpoints: discoveredEndpoints.length });
+    // Set a timeout to save partial results if function is about to be killed (150s safety)
+    const timeoutId = setTimeout(async () => {
+      console.log('[TIMEOUT SAFETY] Saving partial results before shutdown...');
+      await saveResultsToDB('completed');
+      await emitProgress('complete', 10, 100, `Scan saved (partial). ${allFindings.length} findings found.`);
+    }, 150000);
 
-    // Phase 2: Fingerprinting & Technology Detection
-    console.log('[Phase 2] Fingerprinting...');
-    await emitProgress('fingerprint', 2, 20, 'Fingerprinting target technologies...');
-    const fingerprint = await fingerprintTarget(targetUrl, discoveryResults);
-    await emitProgress('fingerprint', 2, 25, `Detected: ${fingerprint.technologies?.join(', ') || 'analyzing...'}`);
+    try {
+      // Phase 1: Comprehensive Endpoint Discovery
+      console.log('[Phase 1] Endpoint Discovery...');
+      await emitProgress('discovery', 1, 5, 'Discovering endpoints & subdomains...');
+      const discoveryResults = await discoverEndpoints(targetUrl, SHODAN_API_KEY, maxDepth);
+      discoveredEndpoints.push(...discoveryResults.endpoints);
+      console.log(`[Phase 1] Discovered ${discoveredEndpoints.length} endpoints`);
+      await emitProgress('discovery', 1, 15, `Discovered ${discoveredEndpoints.length} endpoints`, { endpoints: discoveredEndpoints.length });
 
-    // Phase 3: Vulnerability Assessment on ALL discovered endpoints
-    console.log('[Phase 3] Vulnerability Assessment...');
-    await emitProgress('vuln_assessment', 3, 30, 'Starting vulnerability assessment on all endpoints...');
-    const previousPayloads = await getFailedPayloads(supabase, targetUrl.hostname);
-    
-    const endpointsToTest = discoveredEndpoints.slice(0, 100);
-    for (let i = 0; i < endpointsToTest.length; i++) {
-      const endpoint = endpointsToTest[i];
-      if (i % 5 === 0) {
-        await emitProgress('vuln_assessment', 3, 30 + Math.round((i / endpointsToTest.length) * 15), 
-          `Testing endpoint ${i + 1}/${endpointsToTest.length}`, { currentEndpoint: endpoint });
+      // Phase 2: Fingerprinting & Technology Detection
+      console.log('[Phase 2] Fingerprinting...');
+      await emitProgress('fingerprint', 2, 20, 'Fingerprinting target technologies...');
+      const fingerprint = await fingerprintTarget(targetUrl, discoveryResults);
+      await emitProgress('fingerprint', 2, 25, `Detected: ${fingerprint.technologies?.join(', ') || 'analyzing...'}`);
+
+      // Phase 3: Vulnerability Assessment on ALL discovered endpoints
+      console.log('[Phase 3] Vulnerability Assessment...');
+      await emitProgress('vuln_assessment', 3, 30, 'Starting vulnerability assessment on all endpoints...');
+      const previousPayloads = await getFailedPayloads(supabase, targetUrl.hostname);
+      
+      const endpointsToTest = discoveredEndpoints.slice(0, 50); // Reduced for speed
+      for (let i = 0; i < endpointsToTest.length; i++) {
+        const endpoint = endpointsToTest[i];
+        if (i % 5 === 0) {
+          await emitProgress('vuln_assessment', 3, 30 + Math.round((i / endpointsToTest.length) * 15), 
+            `Testing endpoint ${i + 1}/${endpointsToTest.length}`, { currentEndpoint: endpoint });
+        }
+        const endpointFindings = await assessEndpoint(
+          endpoint, 
+          fingerprint, 
+          LOVABLE_API_KEY, 
+          previousPayloads,
+          retryWithAI
+        );
+        allFindings.push(...endpointFindings);
       }
-      const endpointFindings = await assessEndpoint(
-        endpoint, 
-        fingerprint, 
-        LOVABLE_API_KEY, 
+
+      // Phase 4: Deep Injection Testing
+      console.log('[Phase 4] Deep Injection Testing...');
+      await emitProgress('injection', 4, 50, `Running deep injection tests on ${discoveryResults.forms?.length || 0} forms...`);
+      const injectionFindings = await performDeepInjectionTest(
+        targetUrl,
+        discoveryResults.forms,
+        discoveryResults.params,
+        LOVABLE_API_KEY,
         previousPayloads,
         retryWithAI
       );
-      allFindings.push(...endpointFindings);
-    }
+      allFindings.push(...injectionFindings);
+      await emitProgress('injection', 4, 58, `Injection testing complete. ${allFindings.length} findings so far.`);
 
-    // Phase 4: Deep Injection Testing
-    console.log('[Phase 4] Deep Injection Testing...');
-    await emitProgress('injection', 4, 50, `Running deep injection tests on ${discoveryResults.forms?.length || 0} forms...`);
-    const injectionFindings = await performDeepInjectionTest(
-      targetUrl,
-      discoveryResults.forms,
-      discoveryResults.params,
-      LOVABLE_API_KEY,
-      previousPayloads,
-      retryWithAI
-    );
-    allFindings.push(...injectionFindings);
-    await emitProgress('injection', 4, 58, `Injection testing complete. ${allFindings.length} findings so far.`);
+      // Phase 5: Authentication & Authorization Testing
+      console.log('[Phase 5] Auth Testing...');
+      await emitProgress('auth', 5, 60, 'Testing authentication & authorization mechanisms...');
+      const authFindings = await testAuthentication(targetUrl, discoveryResults.authEndpoints);
+      allFindings.push(...authFindings);
 
-    // Phase 5: Authentication & Authorization Testing
-    console.log('[Phase 5] Auth Testing...');
-    await emitProgress('auth', 5, 60, 'Testing authentication & authorization mechanisms...');
-    const authFindings = await testAuthentication(targetUrl, discoveryResults.authEndpoints);
-    allFindings.push(...authFindings);
+      // Phase 6: Business Logic Testing
+      console.log('[Phase 6] Business Logic Testing...');
+      await emitProgress('business_logic', 6, 68, 'Analyzing business logic for vulnerabilities...');
+      const businessFindings = await testBusinessLogic(targetUrl, discoveryResults.workflows);
+      allFindings.push(...businessFindings);
 
-    // Phase 6: Business Logic Testing
-    console.log('[Phase 6] Business Logic Testing...');
-    await emitProgress('business_logic', 6, 68, 'Analyzing business logic for vulnerabilities...');
-    const businessFindings = await testBusinessLogic(targetUrl, discoveryResults.workflows);
-    allFindings.push(...businessFindings);
-
-    // Phase 7: AI Correlation & Attack Path Analysis
-    console.log('[Phase 7] AI Correlation...');
-    await emitProgress('correlation', 7, 75, `AI correlating ${allFindings.length} findings for attack paths...`);
-    const correlationResult = await performAICorrelation(
-      allFindings,
-      discoveryResults,
-      fingerprint,
-      LOVABLE_API_KEY
-    );
-
-    // Phase 8: Generate POC for exploitable findings
-    console.log('[Phase 8] POC Generation...');
-    const critHighFindings = allFindings.filter(f => f.severity === 'critical' || f.severity === 'high');
-    await emitProgress('poc', 8, 82, `Generating POC exploits for ${critHighFindings.length} critical/high findings...`);
-    const findingsWithPOC = generatePOC ? 
-      await generateExploitPOC(critHighFindings, LOVABLE_API_KEY) :
-      allFindings;
-
-    // Phase 9: False Positive Reduction via AI
-    console.log('[Phase 9] False Positive Analysis...');
-    await emitProgress('fp_reduction', 9, 90, 'AI analyzing for false positive reduction...');
-    const verifiedFindings = enableLearning ?
-      await reduceFalsePositives(findingsWithPOC, previousFindings, LOVABLE_API_KEY) :
-      findingsWithPOC;
-
-    // Phase 10: Save learning data for future improvements
-    await emitProgress('learning', 10, 95, 'Saving learning data for future improvement...');
-    if (enableLearning) {
-      await saveLearningData(supabase, targetUrl.hostname, verifiedFindings, learningData);
-    }
-    await emitProgress('complete', 10, 100, `Scan complete! ${verifiedFindings.filter(f => !f.falsePositive).length} verified findings.`);
-
-    // Calculate severity counts
-    const severityCounts = {
-      critical: verifiedFindings.filter(f => f.severity === 'critical' && !f.falsePositive).length,
-      high: verifiedFindings.filter(f => f.severity === 'high' && !f.falsePositive).length,
-      medium: verifiedFindings.filter(f => f.severity === 'medium' && !f.falsePositive).length,
-      low: verifiedFindings.filter(f => f.severity === 'low' && !f.falsePositive).length,
-      info: verifiedFindings.filter(f => f.severity === 'info' && !f.falsePositive).length
-    };
-
-    // Save to database
-    await supabase.from('scan_history').insert({
-      module: 'autonomous_vapt',
-      scan_type: 'Autonomous VAPT - Full Red Team Assessment',
-      target: targetUrl.toString(),
-      status: 'completed',
-      findings_count: verifiedFindings.filter(f => !f.falsePositive).length,
-      duration_ms: Date.now() - startTime,
-      report: {
-        discovery: discoveryResults,
+      // Phase 7: AI Correlation & Attack Path Analysis
+      console.log('[Phase 7] AI Correlation...');
+      await emitProgress('correlation', 7, 75, `AI correlating ${allFindings.length} findings for attack paths...`);
+      const correlationResult = await performAICorrelation(
+        allFindings,
+        discoveryResults,
         fingerprint,
-        findings: verifiedFindings,
-        correlation: correlationResult,
-        learningData: learningData.length
+        LOVABLE_API_KEY
+      );
+
+      // Phase 8: Generate POC for exploitable findings
+      console.log('[Phase 8] POC Generation...');
+      const critHighFindings = allFindings.filter(f => f.severity === 'critical' || f.severity === 'high');
+      await emitProgress('poc', 8, 82, `Generating POC exploits for ${critHighFindings.length} critical/high findings...`);
+      const findingsWithPOC = generatePOC ? 
+        await generateExploitPOC(critHighFindings, LOVABLE_API_KEY) :
+        allFindings;
+
+      // Phase 9: False Positive Reduction via AI
+      console.log('[Phase 9] False Positive Analysis...');
+      await emitProgress('fp_reduction', 9, 90, 'AI analyzing for false positive reduction...');
+      const verifiedFindings = enableLearning ?
+        await reduceFalsePositives(findingsWithPOC, previousFindings, LOVABLE_API_KEY) :
+        findingsWithPOC;
+
+      // Phase 10: Save learning data
+      await emitProgress('learning', 10, 95, 'Saving learning data for future improvement...');
+      if (enableLearning) {
+        await saveLearningData(supabase, targetUrl.hostname, verifiedFindings, learningData);
       }
-    });
 
-    await supabase.from('security_reports').insert({
-      module: 'autonomous_vapt',
-      title: `Autonomous VAPT - ${targetUrl.hostname}`,
-      summary: `AI-powered assessment found ${verifiedFindings.length} issues: ${severityCounts.critical} critical, ${severityCounts.high} high`,
-      findings: verifiedFindings,
-      severity_counts: severityCounts,
-      recommendations: correlationResult.recommendations
-    });
+      // Clear timeout safety - we completed normally
+      clearTimeout(timeoutId);
 
-    console.log(`[COMPLETE] Scan finished in ${Date.now() - startTime}ms`);
+      // Save final results
+      const { severityCounts, findings } = await saveResultsToDB('completed', verifiedFindings);
+      await emitProgress('complete', 10, 100, `Scan complete! ${findings.length} verified findings.`);
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        target: targetUrl.toString(),
-        scanTime: Date.now() - startTime,
-        discovery: {
-          endpoints: discoveredEndpoints.length,
-          subdomains: discoveryResults.subdomains?.length || 0,
-          forms: discoveryResults.forms?.length || 0,
-          apis: discoveryResults.apiEndpoints?.length || 0
-        },
-        fingerprint,
-        findings: verifiedFindings,
-        attackPaths: correlationResult.attackPaths,
-        chainedExploits: correlationResult.chainedExploits,
-        summary: severityCounts,
-        recommendations: correlationResult.recommendations,
-        learningApplied: enableLearning,
-        aiRetries: verifiedFindings.filter(f => f.retryCount && f.retryCount > 0).length
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+      console.log(`[COMPLETE] Scan finished in ${Date.now() - startTime}ms`);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          target: targetUrl.toString(),
+          scanTime: Date.now() - startTime,
+          discovery: {
+            endpoints: discoveredEndpoints.length,
+            subdomains: discoveryResults.subdomains?.length || 0,
+            forms: discoveryResults.forms?.length || 0,
+            apis: discoveryResults.apiEndpoints?.length || 0
+          },
+          fingerprint,
+          findings: verifiedFindings,
+          attackPaths: correlationResult.attackPaths,
+          chainedExploits: correlationResult.chainedExploits,
+          summary: severityCounts,
+          recommendations: correlationResult.recommendations,
+          learningApplied: enableLearning,
+          aiRetries: verifiedFindings.filter(f => f.retryCount && f.retryCount > 0).length
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    } catch (innerError: any) {
+      clearTimeout(timeoutId);
+      console.error("[SCAN PHASE ERROR]", innerError);
+      // Save whatever we have so far
+      await saveResultsToDB('completed');
+      await emitProgress('complete', 10, 100, `Scan finished with ${allFindings.length} findings (some phases may have failed).`);
+      
+      return new Response(
+        JSON.stringify({
+          success: true,
+          target: targetUrl.toString(),
+          scanTime: Date.now() - startTime,
+          discovery: { endpoints: discoveredEndpoints.length, subdomains: 0, forms: 0, apis: 0 },
+          fingerprint: {},
+          findings: allFindings,
+          attackPaths: [],
+          chainedExploits: [],
+          summary: {
+            critical: allFindings.filter(f => f.severity === 'critical').length,
+            high: allFindings.filter(f => f.severity === 'high').length,
+            medium: allFindings.filter(f => f.severity === 'medium').length,
+            low: allFindings.filter(f => f.severity === 'low').length,
+            info: allFindings.filter(f => f.severity === 'info').length,
+          },
+          recommendations: [],
+          learningApplied: enableLearning,
+          aiRetries: 0
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
   } catch (error: any) {
     console.error("[AUTONOMOUS VAPT ERROR]", error);
