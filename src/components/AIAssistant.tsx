@@ -465,7 +465,8 @@ export const AIAssistant = () => {
       { regex: /audit\s+(?:all|everything)\s+(?:on\s+)?["']?([a-z0-9][a-z0-9\-\.]+\.[a-z]{2,})["']?/i, action: 'full_audit', module: 'workflow' },
       
       // Domain scan commands
-      { regex: /^scan\s+(?:domain\s+)?["']?([a-z0-9][a-z0-9\-\.]+\.[a-z]{2,})["']?$/i, action: 'domain_scan', module: 'workflow' },
+      { regex: /^scan\s+(?:domain\s+)?["']?([a-z0-9][a-z0-9\-\.]+\.[a-z]{2,})["']?\s*$/i, action: 'domain_scan', module: 'workflow' },
+      { regex: /scan\s+["']?([a-z0-9][a-z0-9\-\.]+\.[a-z]{2,})["']?/i, action: 'domain_scan', module: 'workflow' },
       { regex: /scan\s+(?:this\s+)?(?:domain|website|site|target)\s+["']?([a-z0-9][a-z0-9\-\.]+\.[a-z]{2,})["']?/i, action: 'domain_scan', module: 'workflow' },
       
       // Specific module commands
