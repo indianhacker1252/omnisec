@@ -93,6 +93,7 @@ interface ScanResult {
     info: number;
   };
   recommendations: string[];
+  subdomains?: string[];
 }
 
 export const UnifiedVAPTDashboard = () => {
@@ -465,18 +466,33 @@ export const UnifiedVAPTDashboard = () => {
           <div className="mt-6 space-y-3">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-medium flex items-center gap-2">
-                <Activity className="h-4 w-4 animate-pulse" />
+                <Activity className="h-4 w-4 animate-pulse text-primary" />
                 {currentPhase}
               </span>
               <span className="text-sm text-muted-foreground">{progress}%</span>
             </div>
             <Progress value={progress} className="h-3" />
+            {/* Phase indicator */}
+            <div className="grid grid-cols-6 gap-1 text-xs">
+              {[
+                { label: 'Discovery', pct: 8 },
+                { label: 'Subdomains', pct: 18 },
+                { label: 'Fingerprint', pct: 24 },
+                { label: 'Vuln Scan', pct: 40 },
+                { label: 'CORS/Traversal/Cookie', pct: 58 },
+                { label: 'Injection/Auth/AI', pct: 100 },
+              ].map((phase) => (
+                <div key={phase.label} className={`text-center p-1 rounded text-xs ${progress >= phase.pct ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground'}`}>
+                  {phase.label}
+                </div>
+              ))}
+            </div>
             <div className="flex items-center gap-6 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
-                <Globe className="h-3 w-3" /> {liveEndpoints} endpoints discovered
+                <Globe className="h-3 w-3" /> {liveEndpoints} endpoints
               </span>
               <span className="flex items-center gap-1">
-                <Bug className="h-3 w-3" /> {liveFindings} findings so far
+                <Bug className="h-3 w-3" /> {liveFindings} findings
               </span>
               {currentEndpoint && (
                 <span className="flex items-center gap-1 truncate max-w-xs">
@@ -492,32 +508,56 @@ export const UnifiedVAPTDashboard = () => {
       {scanResult && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Summary Stats */}
-          <div className="lg:col-span-3 grid grid-cols-2 md:grid-cols-6 gap-4">
-            <Card className="p-4 text-center bg-red-500/10 border-red-500/30">
-              <div className="text-3xl font-bold text-red-400">{scanResult.summary?.critical || 0}</div>
-              <div className="text-sm text-muted-foreground">Critical</div>
+          <div className="lg:col-span-3 grid grid-cols-3 md:grid-cols-7 gap-3">
+            <Card className="p-4 text-center border-destructive/30 bg-destructive/10">
+              <div className="text-3xl font-bold text-destructive">{scanResult.summary?.critical || 0}</div>
+              <div className="text-xs text-muted-foreground">Critical</div>
             </Card>
-            <Card className="p-4 text-center bg-orange-500/10 border-orange-500/30">
+            <Card className="p-4 text-center border-orange-500/30 bg-orange-500/10">
               <div className="text-3xl font-bold text-orange-400">{scanResult.summary?.high || 0}</div>
-              <div className="text-sm text-muted-foreground">High</div>
+              <div className="text-xs text-muted-foreground">High</div>
             </Card>
-            <Card className="p-4 text-center bg-yellow-500/10 border-yellow-500/30">
+            <Card className="p-4 text-center border-yellow-500/30 bg-yellow-500/10">
               <div className="text-3xl font-bold text-yellow-400">{scanResult.summary?.medium || 0}</div>
-              <div className="text-sm text-muted-foreground">Medium</div>
+              <div className="text-xs text-muted-foreground">Medium</div>
             </Card>
-            <Card className="p-4 text-center bg-blue-500/10 border-blue-500/30">
-              <div className="text-3xl font-bold text-blue-400">{scanResult.summary?.low || 0}</div>
-              <div className="text-sm text-muted-foreground">Low</div>
+            <Card className="p-4 text-center border-primary/30 bg-primary/10">
+              <div className="text-3xl font-bold text-primary">{scanResult.summary?.low || 0}</div>
+              <div className="text-xs text-muted-foreground">Low</div>
             </Card>
-            <Card className="p-4 text-center bg-primary/10 border-primary/30">
+            <Card className="p-4 text-center border-primary/20 bg-primary/5">
+              <div className="text-3xl font-bold text-primary">{scanResult.discovery?.subdomains || 0}</div>
+              <div className="text-xs text-muted-foreground">Subdomains</div>
+            </Card>
+            <Card className="p-4 text-center border-primary/20 bg-primary/5">
               <div className="text-3xl font-bold text-primary">{scanResult.discovery?.endpoints || 0}</div>
-              <div className="text-sm text-muted-foreground">Endpoints</div>
+              <div className="text-xs text-muted-foreground">Endpoints</div>
             </Card>
-            <Card className="p-4 text-center bg-green-500/10 border-green-500/30">
-              <div className="text-3xl font-bold text-green-400">{Math.round((scanResult.scanTime || 0) / 1000)}s</div>
-              <div className="text-sm text-muted-foreground">Scan Time</div>
+            <Card className="p-4 text-center border-primary/20 bg-primary/5">
+              <div className="text-3xl font-bold text-primary">{Math.round((scanResult.scanTime || 0) / 1000)}s</div>
+              <div className="text-xs text-muted-foreground">Scan Time</div>
             </Card>
           </div>
+
+          {/* Subdomains discovered */}
+          {scanResult.subdomains && scanResult.subdomains.length > 0 && (
+            <div className="lg:col-span-3">
+              <Card className="p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Network className="h-4 w-4 text-primary" />
+                  <h3 className="font-semibold">Discovered Subdomains ({scanResult.subdomains.length})</h3>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {scanResult.subdomains.slice(0, 30).map((sub) => (
+                    <Badge key={sub} variant="outline" className="font-mono text-xs">{sub}</Badge>
+                  ))}
+                  {scanResult.subdomains.length > 30 && (
+                    <Badge variant="secondary">+{scanResult.subdomains.length - 30} more</Badge>
+                  )}
+                </div>
+              </Card>
+            </div>
+          )}
 
           {/* Findings List */}
           <div className="lg:col-span-2">
@@ -550,26 +590,37 @@ export const UnifiedVAPTDashboard = () => {
                           onClick={() => setSelectedFinding(finding)}
                         >
                           <div className="flex items-start justify-between mb-2">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <Badge className={getSeverityColor(finding.severity)}>
                                 {finding.severity.toUpperCase()}
                               </Badge>
-                              <span className="font-medium">{finding.title}</span>
+                              {(finding as any).dualConfirmed && (
+                                <Badge variant="outline" className="text-xs border-green-500/50 text-green-400">
+                                  ✓ Dual-Confirmed
+                                </Badge>
+                              )}
+                              <span className="font-medium text-sm">{finding.title}</span>
                             </div>
-                            <Badge variant="outline">{finding.confidence}% conf</Badge>
+                            <Badge variant="outline" className="text-xs shrink-0">{finding.confidence}%</Badge>
                           </div>
                           <p className="text-sm text-muted-foreground line-clamp-2 mb-2">
                             {finding.description}
                           </p>
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Globe className="h-3 w-3" />
+                            <Globe className="h-3 w-3 shrink-0" />
                             <span className="truncate">{finding.endpoint}</span>
                             {finding.cwe && (
-                              <Badge variant="outline" className="ml-auto text-xs">{finding.cwe}</Badge>
+                              <Badge variant="outline" className="ml-auto text-xs shrink-0">{finding.cwe}</Badge>
                             )}
                           </div>
                         </Card>
                       ))}
+                      {(!scanResult.findings || scanResult.findings.filter(f => !f.falsePositive).length === 0) && (
+                        <div className="text-center text-muted-foreground py-12">
+                          <CheckCircle className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                          <p>No confirmed vulnerabilities found</p>
+                        </div>
+                      )}
                     </div>
                   </ScrollArea>
                 </TabsContent>
@@ -624,26 +675,22 @@ export const UnifiedVAPTDashboard = () => {
             <Card className="p-4 h-full">
               {selectedFinding ? (
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <Badge className={getSeverityColor(selectedFinding.severity)}>
-                      {selectedFinding.severity.toUpperCase()}
-                    </Badge>
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <Badge className={getSeverityColor(selectedFinding.severity)}>
+                        {selectedFinding.severity.toUpperCase()}
+                      </Badge>
+                      {(selectedFinding as any).dualConfirmed && (
+                        <Badge variant="outline" className="border-green-500/50 text-green-400 text-xs">✓ Dual-Confirmed</Badge>
+                      )}
+                      <Badge variant="outline" className="text-xs">{selectedFinding.confidence}% confidence</Badge>
+                    </div>
                     <div className="flex gap-1">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => confirmVulnerability(selectedFinding)}
-                        title="Confirm vulnerability"
-                      >
+                      <Button size="icon" variant="ghost" onClick={() => confirmVulnerability(selectedFinding)} title="Confirm">
                         <ThumbsUp className="h-4 w-4 text-green-500" />
                       </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => markFalsePositive(selectedFinding)}
-                        title="Mark as false positive"
-                      >
-                        <ThumbsDown className="h-4 w-4 text-red-500" />
+                      <Button size="icon" variant="ghost" onClick={() => markFalsePositive(selectedFinding)} title="False positive">
+                        <ThumbsDown className="h-4 w-4 text-destructive" />
                       </Button>
                     </div>
                   </div>
@@ -691,8 +738,14 @@ export const UnifiedVAPTDashboard = () => {
 
                   {selectedFinding.evidence && (
                     <div>
-                      <h4 className="font-medium mb-1">Evidence</h4>
+                      <h4 className="font-medium mb-1">Evidence (Method 1)</h4>
                       <p className="text-sm text-muted-foreground">{selectedFinding.evidence}</p>
+                    </div>
+                  )}
+                  {(selectedFinding as any).evidence2 && (
+                    <div>
+                      <h4 className="font-medium mb-1">Evidence (Method 2 — Dual Confirm)</h4>
+                      <p className="text-sm text-muted-foreground">{(selectedFinding as any).evidence2}</p>
                     </div>
                   )}
 
