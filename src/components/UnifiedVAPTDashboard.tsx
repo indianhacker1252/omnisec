@@ -1,9 +1,13 @@
 /**
- * OmniSec™ Unified VAPT Dashboard
- * XBOW-like autonomous penetration testing with AI learning
+ * OmniSec™ Unified VAPT Dashboard v5.0
+ * - Real-time live scan output via Supabase Realtime
+ * - Subdomain Attack Surface Map
+ * - Dedicated CORS/Traversal/Cookie findings tab
+ * - Clickable finding detail modal with full POC
+ * - AI learning with false positive feedback loop
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,43 +16,39 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { SubdomainAttackMap } from "@/components/SubdomainAttackMap";
+import { FindingDetailModal } from "@/components/FindingDetailModal";
 import {
   Brain,
   Zap,
   Target,
   Shield,
   Globe,
-  Search,
   Play,
-  Pause,
-  Square,
   RefreshCw,
   AlertTriangle,
   CheckCircle,
-  XCircle,
   TrendingUp,
   Activity,
   Eye,
-  Download,
-  Copy,
   ThumbsUp,
   ThumbsDown,
   Crosshair,
   Radar,
   Bug,
   Code,
-  FileText,
   Network,
-  Server,
-  Cloud,
-  Key,
   Lock,
   Terminal,
   Layers,
-  GitBranch
+  GitBranch,
+  Wifi,
+  Cookie,
+  FolderOpen,
+  Filter,
+  ChevronRight
 } from "lucide-react";
 
 interface Finding {
@@ -57,9 +57,11 @@ interface Finding {
   title: string;
   description: string;
   endpoint: string;
+  subdomain?: string;
   method?: string;
   payload?: string;
   evidence?: string;
+  evidence2?: string;
   response?: string;
   remediation: string;
   cwe?: string;
@@ -69,6 +71,18 @@ interface Finding {
   poc?: string;
   exploitCode?: string;
   falsePositive?: boolean;
+  dualConfirmed?: boolean;
+  retryCount?: number;
+}
+
+interface LiveLogEntry {
+  timestamp: string;
+  phase: string;
+  message: string;
+  progress: number;
+  findings: number;
+  endpoints: number;
+  currentEndpoint?: string;
 }
 
 interface ScanResult {
@@ -96,19 +110,41 @@ interface ScanResult {
   subdomains?: string[];
 }
 
+const PHASE_LABELS: Record<string, string> = {
+  discovery: "🔍 Endpoint Discovery",
+  subdomain_enum: "🌐 Subdomain Enumeration",
+  fingerprint: "🖐 Fingerprinting",
+  vuln_assessment: "⚡ Vulnerability Assessment",
+  cors_scan: "🔀 CORS Misconfiguration",
+  traversal_scan: "📂 Directory Traversal",
+  cookie_scan: "🍪 Cookie/Session Audit",
+  injection: "💉 Deep Injection Testing",
+  auth: "🔑 Auth & Authorization",
+  business_logic: "🧠 Business Logic / IDOR",
+  correlation: "🤖 AI Correlation & Attack Paths",
+  poc: "📋 POC Generation",
+  learning: "📚 AI Learning Update",
+  complete: "✅ Scan Complete",
+};
+
 export const UnifiedVAPTDashboard = () => {
   const { toast } = useToast();
-  
-  const [target, setTarget] = useState('');
+
+  const [target, setTarget] = useState("");
   const [isScanning, setIsScanning] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [currentPhase, setCurrentPhase] = useState('');
+  const [currentPhase, setCurrentPhase] = useState("");
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [liveFindings, setLiveFindings] = useState(0);
   const [liveEndpoints, setLiveEndpoints] = useState(0);
-  const [currentEndpoint, setCurrentEndpoint] = useState('');
-  
+  const [currentEndpoint, setCurrentEndpoint] = useState("");
+  const [liveLogs, setLiveLogs] = useState<LiveLogEntry[]>([]);
+  const [subdomainFilter, setSubdomainFilter] = useState<string | null>(null);
+  const [activeResultTab, setActiveResultTab] = useState("findings");
+
+  const logsEndRef = useRef<HTMLDivElement>(null);
+
   // AI Settings
   const [enableLearning, setEnableLearning] = useState(true);
   const [retryWithAI, setRetryWithAI] = useState(true);
@@ -120,83 +156,88 @@ export const UnifiedVAPTDashboard = () => {
     totalScans: 0,
     totalFindings: 0,
     learningPoints: 0,
-    accuracy: 0
+    confirmedVulns: 0,
+    falsePositives: 0,
+    accuracy: 0,
   });
-
-  // Realtime subscription for scan progress
-  const [scanId, setScanId] = useState<string | null>(null);
 
   useEffect(() => {
     loadLearningStats();
   }, []);
 
+  // Auto-scroll live log
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [liveLogs]);
+
+  // Realtime subscription
   useEffect(() => {
     if (!isScanning) return;
 
     const channel = supabase
-      .channel('scan-progress-live')
+      .channel(`scan-progress-live-${Date.now()}`)
       .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'scan_progress',
-        },
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "scan_progress" },
         (payload: any) => {
           const data = payload.new;
           setProgress(data.progress || 0);
-          setCurrentPhase(data.message || data.phase || '');
+          const phaseLabel = PHASE_LABELS[data.phase] || data.phase;
+          setCurrentPhase(phaseLabel);
           setLiveFindings(data.findings_so_far || 0);
           setLiveEndpoints(data.endpoints_discovered || 0);
           if (data.current_endpoint) setCurrentEndpoint(data.current_endpoint);
 
-          if (data.phase === 'complete') {
-            toast({
-              title: "Phase Complete",
-              description: data.message,
-            });
-          }
+          setLiveLogs((prev) => [
+            ...prev,
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              phase: data.phase,
+              message: data.message || phaseLabel,
+              progress: data.progress || 0,
+              findings: data.findings_so_far || 0,
+              endpoints: data.endpoints_discovered || 0,
+              currentEndpoint: data.current_endpoint || undefined,
+            },
+          ]);
         }
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [isScanning]);
 
   const loadLearningStats = async () => {
     try {
-      const { data: scans } = await supabase
-        .from('scan_history')
-        .select('id, findings_count, status')
-        .order('created_at', { ascending: false })
-        .limit(100);
-
-      const { data: actions } = await supabase
-        .from('vapt_test_actions')
-        .select('outcome_label')
-        .limit(500);
+      const [{ data: scans }, { data: actions }, { data: feedback }] = await Promise.all([
+        supabase.from("scan_history").select("id, findings_count").limit(200),
+        supabase.from("vapt_test_actions").select("outcome_label").limit(1000),
+        supabase.from("vapt_feedback").select("rating").limit(500),
+      ]);
 
       const totalScans = scans?.length || 0;
-      const totalFindings = scans?.reduce((sum, s) => sum + (s.findings_count || 0), 0) || 0;
-      const successfulActions = actions?.filter(a => a.outcome_label === 'success').length || 0;
+      const totalFindings = scans?.reduce((s, r) => s + (r.findings_count || 0), 0) || 0;
+      const confirmed = feedback?.filter((f) => f.rating === "confirmed").length || 0;
+      const fps = feedback?.filter((f) => f.rating === "false_positive").length || 0;
+      const successActions = actions?.filter((a) => a.outcome_label === "success").length || 0;
       const totalActions = actions?.length || 1;
 
       setLearningStats({
         totalScans,
         totalFindings,
-        learningPoints: (actions?.length || 0),
-        accuracy: Math.round((successfulActions / totalActions) * 100)
+        learningPoints: actions?.length || 0,
+        confirmedVulns: confirmed,
+        falsePositives: fps,
+        accuracy: Math.round((successActions / totalActions) * 100),
       });
     } catch (e) {
-      console.error('Failed to load learning stats:', e);
+      console.error("Failed to load stats:", e);
     }
   };
 
   const runAutonomousVAPT = async () => {
     if (!target.trim()) {
-      toast({ title: "Target Required", description: "Enter a target domain or IP", variant: "destructive" });
+      toast({ title: "Target Required", variant: "destructive" });
       return;
     }
 
@@ -204,28 +245,19 @@ export const UnifiedVAPTDashboard = () => {
     setProgress(0);
     setLiveFindings(0);
     setLiveEndpoints(0);
-    setCurrentEndpoint('');
+    setCurrentEndpoint("");
     setScanResult(null);
     setSelectedFinding(null);
-    setCurrentPhase('Initializing autonomous scanner...');
+    setLiveLogs([]);
+    setCurrentPhase("Initializing autonomous scanner...");
+    setSubdomainFilter(null);
 
     try {
-      const response = await supabase.functions.invoke('autonomous-vapt', {
-        body: {
-          target,
-          action: 'full_scan',
-          modules: ['all'],
-          maxDepth,
-          enableLearning,
-          retryWithAI,
-          generatePOC
-        }
+      const response = await supabase.functions.invoke("autonomous-vapt", {
+        body: { target, action: "full_scan", modules: ["all"], maxDepth, enableLearning, retryWithAI, generatePOC },
       });
 
       if (response.error) {
-        // Edge function may have timed out but scan continues server-side
-        // Poll database for results
-        console.log('Edge function response error, polling for results...', response.error.message);
         await pollForResults(target);
         return;
       }
@@ -233,19 +265,14 @@ export const UnifiedVAPTDashboard = () => {
       const result = response.data as ScanResult;
       setScanResult(result);
       setProgress(100);
-      setCurrentPhase('Scan complete!');
-
+      setCurrentPhase("✅ Scan complete!");
       await loadLearningStats();
 
       toast({
         title: "Autonomous VAPT Complete",
-        description: `Found ${result.findings?.length || 0} vulnerabilities across ${result.discovery?.endpoints || 0} endpoints`
+        description: `Found ${result.findings?.length || 0} vulnerabilities | ${result.discovery?.subdomains || 0} subdomains mapped`,
       });
-
-    } catch (error: any) {
-      console.error('Autonomous VAPT error:', error);
-      // Connection may have timed out but scan continues on server
-      // Poll DB for completed results
+    } catch {
       await pollForResults(target);
     } finally {
       setIsScanning(false);
@@ -253,38 +280,32 @@ export const UnifiedVAPTDashboard = () => {
   };
 
   const pollForResults = async (scanTarget: string) => {
-    setCurrentPhase('Scan running server-side, checking for results...');
-    // Extract clean domain for matching
-    const cleanDomain = scanTarget.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
-    const pollStartTime = new Date().toISOString();
-    
-    for (let attempt = 0; attempt < 30; attempt++) {
-      await new Promise(r => setTimeout(r, 10000));
-      
+    setCurrentPhase("Scan running server-side, polling for results...");
+    const cleanDomain = scanTarget.replace(/^https?:\/\//, "").replace(/\/.*$/, "").toLowerCase();
+
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await new Promise((r) => setTimeout(r, 12000));
       try {
-        // First check scan_history for a completed scan matching this target
         const { data: scans } = await supabase
-          .from('scan_history')
-          .select('id, target, status, findings_count')
-          .or(`target.ilike.%${cleanDomain}%`)
-          .eq('status', 'completed')
-          .order('created_at', { ascending: false })
+          .from("scan_history")
+          .select("id, target, status, findings_count, report")
+          .ilike("target", `%${cleanDomain}%`)
+          .eq("status", "completed")
+          .order("created_at", { ascending: false })
           .limit(1);
 
         if (scans && scans.length > 0) {
           const scan = scans[0];
-          
-          // Now get the security report linked to this scan
-          const { data: reports } = await supabase
-            .from('security_reports')
-            .select('*')
-            .eq('scan_id', scan.id)
-            .limit(1);
+          const report = scan.report as any;
+          const findings = report?.findings || [];
+          const sevCounts = {
+            critical: findings.filter((f: any) => f.severity === "critical").length,
+            high: findings.filter((f: any) => f.severity === "high").length,
+            medium: findings.filter((f: any) => f.severity === "medium").length,
+            low: findings.filter((f: any) => f.severity === "low").length,
+            info: findings.filter((f: any) => f.severity === "info").length,
+          };
 
-          const report = reports?.[0];
-          const findings = (report?.findings as any[] || []);
-          const sevCounts = (report?.severity_counts as any) || {};
-          
           setScanResult({
             success: true,
             target: scanTarget,
@@ -294,103 +315,151 @@ export const UnifiedVAPTDashboard = () => {
             findings,
             attackPaths: [],
             chainedExploits: [],
-            summary: {
-              critical: sevCounts.critical || 0,
-              high: sevCounts.high || 0,
-              medium: sevCounts.medium || 0,
-              low: sevCounts.low || 0,
-              info: sevCounts.info || 0,
-            },
-            recommendations: (report?.recommendations as string[]) || []
+            summary: sevCounts,
+            recommendations: [],
+            subdomains: [],
           });
           setProgress(100);
-          setCurrentPhase('Scan complete! (retrieved from server)');
+          setCurrentPhase("✅ Results retrieved from server");
           await loadLearningStats();
-
-          toast({
-            title: "Autonomous VAPT Complete",
-            description: `Found ${findings.length} vulnerabilities for ${cleanDomain}`
-          });
+          toast({ title: "VAPT Complete", description: `${findings.length} findings for ${cleanDomain}` });
           return;
         }
-      } catch (e) {
-        console.log('Poll attempt', attempt, 'failed:', e);
-      }
-      
-      setProgress(Math.min(50 + attempt * 2, 95));
-      setCurrentPhase(`Scan running server-side... checking (${attempt + 1}/30)`);
+      } catch {}
+
+      setProgress(Math.min(40 + attempt * 3, 95));
+      setCurrentPhase(`Polling for results... (${attempt + 1}/20)`);
     }
 
-    toast({
-      title: "Scan Timeout",
-      description: "Scan is still running on the server. Check back shortly.",
-      variant: "destructive"
-    });
+    toast({ title: "Scan Still Running", description: "Check back in a moment", variant: "destructive" });
   };
 
   const markFalsePositive = async (finding: Finding) => {
     try {
-      await supabase.from('vapt_feedback').insert({
-        rating: 'false_positive',
-        comments: `Marked as false positive: ${finding.title}`,
+      await supabase.from("vapt_feedback").insert({
+        rating: "false_positive",
+        comments: `FP: ${finding.title} at ${finding.endpoint} — confidence was ${finding.confidence}%`,
       });
-      
       if (scanResult) {
-        const updatedFindings = scanResult.findings.map(f =>
-          f.id === finding.id ? { ...f, falsePositive: true } : f
-        );
-        setScanResult({ ...scanResult, findings: updatedFindings });
+        setScanResult({
+          ...scanResult,
+          findings: scanResult.findings.map((f) => f.id === finding.id ? { ...f, falsePositive: true } : f),
+        });
       }
-      
-      toast({ title: "Feedback Recorded", description: "AI will learn from this for future scans" });
-    } catch (e) {
-      toast({ title: "Error", description: "Failed to record feedback", variant: "destructive" });
+      setSelectedFinding(null);
+      toast({ title: "False Positive Recorded", description: "AI will learn to avoid this in future scans" });
+    } catch {
+      toast({ title: "Error", variant: "destructive" });
     }
   };
 
   const confirmVulnerability = async (finding: Finding) => {
     try {
-      await supabase.from('vapt_feedback').insert({
-        rating: 'confirmed',
-        comments: `Confirmed vulnerability: ${finding.title}`,
+      await supabase.from("vapt_feedback").insert({
+        rating: "confirmed",
+        comments: `Confirmed: ${finding.title} — ${finding.dualConfirmed ? "dual-confirmed" : "single"} | ${finding.confidence}% confidence`,
       });
-      
-      toast({ title: "Vulnerability Confirmed", description: "Added to learning dataset" });
-    } catch (e) {
-      toast({ title: "Error", description: "Failed to record feedback", variant: "destructive" });
+      toast({ title: "Confirmed ✓", description: "Added to AI training dataset" });
+    } catch {
+      toast({ title: "Error", variant: "destructive" });
     }
   };
 
-  const copyPOC = (poc: string) => {
-    navigator.clipboard.writeText(poc);
-    toast({ title: "Copied!", description: "POC copied to clipboard" });
-  };
-
-  const getSeverityColor = (severity: string) => {
-    switch (severity) {
-      case 'critical': return 'bg-red-500/20 text-red-400 border-red-500/50';
-      case 'high': return 'bg-orange-500/20 text-orange-400 border-orange-500/50';
-      case 'medium': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50';
-      case 'low': return 'bg-blue-500/20 text-blue-400 border-blue-500/50';
-      default: return 'bg-gray-500/20 text-gray-400 border-gray-500/50';
+  const getSeverityStyle = (sev: string) => {
+    switch (sev) {
+      case "critical": return "bg-destructive/20 text-destructive border-destructive/50";
+      case "high": return "bg-orange-500/20 text-orange-400 border-orange-500/50";
+      case "medium": return "bg-yellow-500/20 text-yellow-400 border-yellow-500/50";
+      case "low": return "bg-primary/20 text-primary border-primary/50";
+      default: return "bg-muted text-muted-foreground border-border";
     }
   };
+
+  // Filter helpers
+  const allFindings = (scanResult?.findings || []).filter((f) => !f.falsePositive);
+
+  const filteredFindings = subdomainFilter
+    ? allFindings.filter((f) => f.endpoint?.includes(subdomainFilter) || f.subdomain === subdomainFilter)
+    : allFindings;
+
+  const corsFindings = filteredFindings.filter((f) =>
+    f.id?.startsWith("CORS") || f.cwe === "CWE-346" || f.title?.toLowerCase().includes("cors")
+  );
+  const traversalFindings = filteredFindings.filter((f) =>
+    f.id?.startsWith("TRAVERSAL") || f.cwe === "CWE-22" || f.title?.toLowerCase().includes("traversal") || f.title?.toLowerCase().includes("path")
+  );
+  const cookieFindings = filteredFindings.filter((f) =>
+    f.id?.startsWith("COOKIE") || ["CWE-1004", "CWE-614", "CWE-352"].includes(f.cwe || "") || f.title?.toLowerCase().includes("cookie") || f.title?.toLowerCase().includes("session")
+  );
+  const otherFindings = filteredFindings.filter(
+    (f) => !corsFindings.includes(f) && !traversalFindings.includes(f) && !cookieFindings.includes(f)
+  );
+
+  const FindingCard = ({ finding }: { finding: Finding }) => (
+    <Card
+      className={`p-4 cursor-pointer transition-all hover:border-primary/40 hover:bg-primary/5 ${
+        selectedFinding?.id === finding.id ? "border-primary bg-primary/10" : "border-border/50"
+      }`}
+      onClick={() => setSelectedFinding(finding)}
+    >
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2 flex-wrap min-w-0">
+          <Badge className={`text-xs border shrink-0 ${getSeverityStyle(finding.severity)}`}>
+            {finding.severity.toUpperCase()}
+          </Badge>
+          {finding.dualConfirmed && (
+            <Badge variant="outline" className="text-[10px] border-green-500/50 text-green-400 shrink-0">
+              ✓ Confirmed
+            </Badge>
+          )}
+          <span className="font-medium text-sm leading-tight">{finding.title}</span>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <Badge variant="outline" className="text-[10px]">{finding.confidence}%</Badge>
+          <ChevronRight className="h-3 w-3 text-muted-foreground" />
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground line-clamp-2 mb-2">{finding.description}</p>
+      <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+        <Globe className="h-3 w-3 shrink-0" />
+        <span className="truncate font-mono">{finding.endpoint}</span>
+        {finding.cwe && <Badge variant="outline" className="ml-auto shrink-0 text-[10px]">{finding.cwe}</Badge>}
+      </div>
+    </Card>
+  );
+
+  const EmptyState = ({ label }: { label: string }) => (
+    <div className="text-center text-muted-foreground py-12">
+      <CheckCircle className="h-10 w-10 mx-auto mb-3 opacity-30" />
+      <p className="text-sm">{label}</p>
+    </div>
+  );
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <Card className="p-6 bg-gradient-to-br from-card to-card/80 border-primary/20">
-        <div className="flex items-center justify-between mb-6">
+      {/* Finding detail modal */}
+      {selectedFinding && (
+        <FindingDetailModal
+          finding={selectedFinding}
+          onClose={() => setSelectedFinding(null)}
+          onConfirm={confirmVulnerability}
+          onFalsePositive={markFalsePositive}
+        />
+      )}
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <Card className="p-6 border-primary/20 bg-gradient-to-br from-card to-card/80">
+        <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
           <div className="flex items-center gap-3">
             <div className="p-3 bg-primary/10 rounded-xl">
               <Crosshair className="h-8 w-8 text-primary" />
             </div>
             <div>
               <h1 className="text-2xl font-bold">Autonomous VAPT Engine</h1>
-              <p className="text-muted-foreground">XBOW-like AI-powered penetration testing</p>
+              <p className="text-muted-foreground text-sm">XBOW-like AI-powered penetration testing v5.0</p>
             </div>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 flex-wrap">
             <Badge variant="outline" className="gap-1 px-3 py-1">
               <Brain className="h-4 w-4" />
               {learningStats.learningPoints} Learning Points
@@ -399,6 +468,12 @@ export const UnifiedVAPTDashboard = () => {
               <TrendingUp className="h-4 w-4" />
               {learningStats.accuracy}% Accuracy
             </Badge>
+            {learningStats.falsePositives > 0 && (
+              <Badge variant="outline" className="gap-1 px-3 py-1 border-yellow-500/50 text-yellow-400">
+                <ThumbsDown className="h-3 w-3" />
+                {learningStats.falsePositives} FPs filtered
+              </Badge>
+            )}
           </div>
         </div>
 
@@ -408,32 +483,22 @@ export const UnifiedVAPTDashboard = () => {
             <Input
               value={target}
               onChange={(e) => setTarget(e.target.value)}
-              placeholder="Enter target (e.g., example.com, 192.168.1.1, https://target.com)"
-              className="h-14 text-lg"
+              onKeyDown={(e) => e.key === "Enter" && !isScanning && runAutonomousVAPT()}
+              placeholder="Enter target: testphp.vulnweb.com, example.com, https://target.com"
+              className="h-14 text-base"
               disabled={isScanning}
             />
           </div>
-          <Button
-            onClick={runAutonomousVAPT}
-            disabled={isScanning}
-            className="h-14 text-lg gap-2"
-            size="lg"
-          >
+          <Button onClick={runAutonomousVAPT} disabled={isScanning} className="h-14 text-base gap-2" size="lg">
             {isScanning ? (
-              <>
-                <RefreshCw className="h-5 w-5 animate-spin" />
-                Scanning...
-              </>
+              <><RefreshCw className="h-5 w-5 animate-spin" /> Scanning...</>
             ) : (
-              <>
-                <Radar className="h-5 w-5" />
-                Start Autonomous Scan
-              </>
+              <><Radar className="h-5 w-5" /> Start VAPT</>
             )}
           </Button>
         </div>
 
-        {/* AI Settings */}
+        {/* Settings */}
         <div className="flex flex-wrap items-center gap-6 p-4 bg-background/50 rounded-lg">
           <div className="flex items-center gap-2">
             <Switch checked={enableLearning} onCheckedChange={setEnableLearning} />
@@ -449,10 +514,11 @@ export const UnifiedVAPTDashboard = () => {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">Depth:</span>
-            <select 
-              value={maxDepth} 
+            <select
+              value={maxDepth}
               onChange={(e) => setMaxDepth(parseInt(e.target.value))}
-              className="bg-background border rounded px-2 py-1 text-sm"
+              className="bg-background border border-border rounded px-2 py-1 text-sm"
+              disabled={isScanning}
             >
               <option value="1">Shallow</option>
               <option value="3">Normal</option>
@@ -464,26 +530,31 @@ export const UnifiedVAPTDashboard = () => {
         {/* Progress */}
         {isScanning && (
           <div className="mt-6 space-y-3">
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center justify-between">
               <span className="text-sm font-medium flex items-center gap-2">
                 <Activity className="h-4 w-4 animate-pulse text-primary" />
                 {currentPhase}
               </span>
               <span className="text-sm text-muted-foreground">{progress}%</span>
             </div>
-            <Progress value={progress} className="h-3" />
-            {/* Phase indicator */}
-            <div className="grid grid-cols-6 gap-1 text-xs">
+            <Progress value={progress} className="h-2" />
+            <div className="grid grid-cols-7 gap-1 text-xs">
               {[
-                { label: 'Discovery', pct: 8 },
-                { label: 'Subdomains', pct: 18 },
-                { label: 'Fingerprint', pct: 24 },
-                { label: 'Vuln Scan', pct: 40 },
-                { label: 'CORS/Traversal/Cookie', pct: 58 },
-                { label: 'Injection/Auth/AI', pct: 100 },
-              ].map((phase) => (
-                <div key={phase.label} className={`text-center p-1 rounded text-xs ${progress >= phase.pct ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground'}`}>
-                  {phase.label}
+                { label: "Recon", pct: 8 },
+                { label: "Subdomains", pct: 18 },
+                { label: "Fingerprint", pct: 24 },
+                { label: "Vuln Scan", pct: 38 },
+                { label: "CORS/Trav/Cookie", pct: 58 },
+                { label: "Injection/Auth", pct: 80 },
+                { label: "AI/POC", pct: 100 },
+              ].map((p) => (
+                <div
+                  key={p.label}
+                  className={`text-center p-1 rounded transition-colors ${
+                    progress >= p.pct ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {p.label}
                 </div>
               ))}
             </div>
@@ -495,8 +566,8 @@ export const UnifiedVAPTDashboard = () => {
                 <Bug className="h-3 w-3" /> {liveFindings} findings
               </span>
               {currentEndpoint && (
-                <span className="flex items-center gap-1 truncate max-w-xs">
-                  <Target className="h-3 w-3" /> {currentEndpoint}
+                <span className="flex items-center gap-1 truncate max-w-xs font-mono text-[10px]">
+                  <Target className="h-3 w-3 shrink-0" /> {currentEndpoint}
                 </span>
               )}
             </div>
@@ -504,340 +575,227 @@ export const UnifiedVAPTDashboard = () => {
         )}
       </Card>
 
-      {/* Results */}
+      {/* ── Live Scan Output ──────────────────────────────────────────────────── */}
+      {(isScanning || liveLogs.length > 0) && (
+        <Card className="p-4 border-primary/20">
+          <div className="flex items-center gap-2 mb-3">
+            <Terminal className="h-4 w-4 text-primary" />
+            <h3 className="font-semibold">Live Scan Output</h3>
+            {isScanning && <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse ml-auto" />}
+          </div>
+          <ScrollArea className="h-48 bg-background rounded border border-border/40 p-3 font-mono text-xs">
+            {liveLogs.map((log, i) => (
+              <div key={i} className="flex gap-3 py-0.5 hover:bg-primary/5 rounded px-1">
+                <span className="text-muted-foreground shrink-0">{log.timestamp}</span>
+                <span className="text-primary shrink-0">[{log.progress}%]</span>
+                <span className="flex-1">{log.message}</span>
+                {log.findings > 0 && (
+                  <span className="text-yellow-400 shrink-0">{log.findings}🐛</span>
+                )}
+                {log.endpoints > 0 && (
+                  <span className="text-primary/70 shrink-0">{log.endpoints}🌐</span>
+                )}
+              </div>
+            ))}
+            {liveLogs.length === 0 && isScanning && (
+              <div className="text-muted-foreground animate-pulse">Waiting for scan events...</div>
+            )}
+            <div ref={logsEndRef} />
+          </ScrollArea>
+        </Card>
+      )}
+
+      {/* ── Results ──────────────────────────────────────────────────────────── */}
       {scanResult && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="space-y-6">
           {/* Summary Stats */}
-          <div className="lg:col-span-3 grid grid-cols-3 md:grid-cols-7 gap-3">
-            <Card className="p-4 text-center border-destructive/30 bg-destructive/10">
-              <div className="text-3xl font-bold text-destructive">{scanResult.summary?.critical || 0}</div>
-              <div className="text-xs text-muted-foreground">Critical</div>
-            </Card>
-            <Card className="p-4 text-center border-orange-500/30 bg-orange-500/10">
-              <div className="text-3xl font-bold text-orange-400">{scanResult.summary?.high || 0}</div>
-              <div className="text-xs text-muted-foreground">High</div>
-            </Card>
-            <Card className="p-4 text-center border-yellow-500/30 bg-yellow-500/10">
-              <div className="text-3xl font-bold text-yellow-400">{scanResult.summary?.medium || 0}</div>
-              <div className="text-xs text-muted-foreground">Medium</div>
-            </Card>
-            <Card className="p-4 text-center border-primary/30 bg-primary/10">
-              <div className="text-3xl font-bold text-primary">{scanResult.summary?.low || 0}</div>
-              <div className="text-xs text-muted-foreground">Low</div>
-            </Card>
-            <Card className="p-4 text-center border-primary/20 bg-primary/5">
-              <div className="text-3xl font-bold text-primary">{scanResult.discovery?.subdomains || 0}</div>
-              <div className="text-xs text-muted-foreground">Subdomains</div>
-            </Card>
-            <Card className="p-4 text-center border-primary/20 bg-primary/5">
-              <div className="text-3xl font-bold text-primary">{scanResult.discovery?.endpoints || 0}</div>
-              <div className="text-xs text-muted-foreground">Endpoints</div>
-            </Card>
-            <Card className="p-4 text-center border-primary/20 bg-primary/5">
-              <div className="text-3xl font-bold text-primary">{Math.round((scanResult.scanTime || 0) / 1000)}s</div>
-              <div className="text-xs text-muted-foreground">Scan Time</div>
-            </Card>
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 gap-3">
+            {[
+              { label: "Critical", value: scanResult.summary?.critical || 0, cls: "text-destructive border-destructive/30 bg-destructive/10" },
+              { label: "High", value: scanResult.summary?.high || 0, cls: "text-orange-400 border-orange-500/30 bg-orange-500/10" },
+              { label: "Medium", value: scanResult.summary?.medium || 0, cls: "text-yellow-400 border-yellow-500/30 bg-yellow-500/10" },
+              { label: "Low", value: scanResult.summary?.low || 0, cls: "text-primary border-primary/30 bg-primary/10" },
+              { label: "Subdomains", value: scanResult.discovery?.subdomains || scanResult.subdomains?.length || 0, cls: "text-primary border-primary/20 bg-primary/5" },
+              { label: "Endpoints", value: scanResult.discovery?.endpoints || 0, cls: "text-primary border-primary/20 bg-primary/5" },
+              { label: "Scan Time", value: `${Math.round((scanResult.scanTime || 0) / 1000)}s`, cls: "text-muted-foreground border-border bg-muted/30" },
+            ].map((s) => (
+              <Card key={s.label} className={`p-4 text-center border ${s.cls}`}>
+                <div className="text-2xl font-bold">{s.value}</div>
+                <div className="text-xs text-muted-foreground">{s.label}</div>
+              </Card>
+            ))}
           </div>
 
-          {/* Subdomains discovered */}
-          {scanResult.subdomains && scanResult.subdomains.length > 0 && (
-            <div className="lg:col-span-3">
-              <Card className="p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <Network className="h-4 w-4 text-primary" />
-                  <h3 className="font-semibold">Discovered Subdomains ({scanResult.subdomains.length})</h3>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {scanResult.subdomains.slice(0, 30).map((sub) => (
-                    <Badge key={sub} variant="outline" className="font-mono text-xs">{sub}</Badge>
-                  ))}
-                  {scanResult.subdomains.length > 30 && (
-                    <Badge variant="secondary">+{scanResult.subdomains.length - 30} more</Badge>
-                  )}
-                </div>
-              </Card>
+          {/* Subdomain filter chip */}
+          {subdomainFilter && (
+            <div className="flex items-center gap-2 text-sm">
+              <Filter className="h-4 w-4 text-primary" />
+              <span>Filtered to:</span>
+              <Badge variant="outline" className="font-mono gap-1">
+                {subdomainFilter}
+                <button onClick={() => setSubdomainFilter(null)} className="ml-1 text-muted-foreground hover:text-foreground">×</button>
+              </Badge>
             </div>
           )}
 
-          {/* Findings List */}
-          <div className="lg:col-span-2">
-            <Card className="p-4">
-              <Tabs defaultValue="findings">
-                <TabsList className="grid w-full grid-cols-3 mb-4">
-                  <TabsTrigger value="findings" className="gap-2">
-                    <Bug className="h-4 w-4" />
-                    Findings ({scanResult.findings?.length || 0})
-                  </TabsTrigger>
-                  <TabsTrigger value="attacks" className="gap-2">
-                    <GitBranch className="h-4 w-4" />
-                    Attack Paths
-                  </TabsTrigger>
-                  <TabsTrigger value="recommendations" className="gap-2">
-                    <Shield className="h-4 w-4" />
-                    Recommendations
-                  </TabsTrigger>
-                </TabsList>
+          {/* Attack Surface Map */}
+          {(scanResult.subdomains?.length || 0) > 0 && (
+            <SubdomainAttackMap
+              subdomains={scanResult.subdomains || []}
+              findings={allFindings}
+              onSelectSubdomain={(sub) => {
+                setSubdomainFilter(sub);
+                setActiveResultTab("findings");
+              }}
+            />
+          )}
 
-                <TabsContent value="findings">
-                  <ScrollArea className="h-[500px]">
-                    <div className="space-y-3">
-                      {scanResult.findings?.filter(f => !f.falsePositive).map((finding) => (
-                        <Card
-                          key={finding.id}
-                          className={`p-4 cursor-pointer transition-all hover:border-primary/50 ${
-                            selectedFinding?.id === finding.id ? 'border-primary' : ''
-                          }`}
-                          onClick={() => setSelectedFinding(finding)}
-                        >
-                          <div className="flex items-start justify-between mb-2">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <Badge className={getSeverityColor(finding.severity)}>
-                                {finding.severity.toUpperCase()}
-                              </Badge>
-                              {(finding as any).dualConfirmed && (
-                                <Badge variant="outline" className="text-xs border-green-500/50 text-green-400">
-                                  ✓ Dual-Confirmed
-                                </Badge>
-                              )}
-                              <span className="font-medium text-sm">{finding.title}</span>
+          {/* Findings Tabs */}
+          <Card className="p-4 border-primary/20">
+            <Tabs value={activeResultTab} onValueChange={setActiveResultTab}>
+              <TabsList className="grid w-full grid-cols-2 md:grid-cols-5 mb-4">
+                <TabsTrigger value="findings" className="gap-1 text-xs">
+                  <Bug className="h-3 w-3" />
+                  All ({otherFindings.length})
+                </TabsTrigger>
+                <TabsTrigger value="cors" className="gap-1 text-xs">
+                  <Wifi className="h-3 w-3" />
+                  CORS ({corsFindings.length})
+                </TabsTrigger>
+                <TabsTrigger value="traversal" className="gap-1 text-xs">
+                  <FolderOpen className="h-3 w-3" />
+                  Traversal ({traversalFindings.length})
+                </TabsTrigger>
+                <TabsTrigger value="cookies" className="gap-1 text-xs">
+                  <Cookie className="h-3 w-3" />
+                  Cookies ({cookieFindings.length})
+                </TabsTrigger>
+                <TabsTrigger value="attacks" className="gap-1 text-xs">
+                  <Layers className="h-3 w-3" />
+                  Attack Paths
+                </TabsTrigger>
+              </TabsList>
+
+              {/* All Findings */}
+              <TabsContent value="findings">
+                <ScrollArea className="h-[520px]">
+                  <div className="space-y-3 pr-2">
+                    {otherFindings.map((f) => <FindingCard key={f.id} finding={f} />)}
+                    {otherFindings.length === 0 && <EmptyState label="No general findings" />}
+                  </div>
+                </ScrollArea>
+              </TabsContent>
+
+              {/* CORS Findings */}
+              <TabsContent value="cors">
+                <div className="mb-3 p-3 bg-primary/5 rounded border border-primary/20 text-xs text-muted-foreground">
+                  <div className="font-medium text-foreground mb-1 flex items-center gap-1">
+                    <Wifi className="h-3 w-3 text-primary" /> CORS Misconfiguration Scanner
+                  </div>
+                  Tests arbitrary origin reflection via OPTIONS + GET dual-confirmation. Only flags when both methods agree.
+                </div>
+                <ScrollArea className="h-[460px]">
+                  <div className="space-y-3 pr-2">
+                    {corsFindings.map((f) => <FindingCard key={f.id} finding={f} />)}
+                    {corsFindings.length === 0 && <EmptyState label="No CORS misconfigurations detected — target properly restricts cross-origin requests" />}
+                  </div>
+                </ScrollArea>
+              </TabsContent>
+
+              {/* Directory Traversal Findings */}
+              <TabsContent value="traversal">
+                <div className="mb-3 p-3 bg-primary/5 rounded border border-primary/20 text-xs text-muted-foreground">
+                  <div className="font-medium text-foreground mb-1 flex items-center gap-1">
+                    <FolderOpen className="h-3 w-3 text-primary" /> Directory/Path Traversal Scanner
+                  </div>
+                  Tests file parameters with multiple encodings (../../../etc/passwd, %2e%2e, etc.). Only flags when file content is actually returned.
+                </div>
+                <ScrollArea className="h-[460px]">
+                  <div className="space-y-3 pr-2">
+                    {traversalFindings.map((f) => <FindingCard key={f.id} finding={f} />)}
+                    {traversalFindings.length === 0 && <EmptyState label="No path traversal vulnerabilities detected" />}
+                  </div>
+                </ScrollArea>
+              </TabsContent>
+
+              {/* Cookie / Session Findings */}
+              <TabsContent value="cookies">
+                <div className="mb-3 p-3 bg-primary/5 rounded border border-primary/20 text-xs text-muted-foreground">
+                  <div className="font-medium text-foreground mb-1 flex items-center gap-1">
+                    <Cookie className="h-3 w-3 text-primary" /> Cookie & Session Security Auditor
+                  </div>
+                  Checks HttpOnly, Secure, SameSite flags. HttpOnly issues dual-confirmed by inline script presence (XSS → cookie theft vector).
+                </div>
+                <ScrollArea className="h-[460px]">
+                  <div className="space-y-3 pr-2">
+                    {cookieFindings.map((f) => <FindingCard key={f.id} finding={f} />)}
+                    {cookieFindings.length === 0 && <EmptyState label="No cookie security issues found — cookies are properly hardened" />}
+                  </div>
+                </ScrollArea>
+              </TabsContent>
+
+              {/* Attack Paths */}
+              <TabsContent value="attacks">
+                <ScrollArea className="h-[520px]">
+                  <div className="space-y-3 pr-2">
+                    {(scanResult.attackPaths || []).map((path, i) => (
+                      <Card key={i} className="p-4 border-border/50">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Layers className="h-4 w-4 text-primary" />
+                          <span className="font-semibold">{path.name}</span>
+                          {path.mitre && <Badge variant="outline" className="text-xs font-mono ml-auto">{path.mitre}</Badge>}
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-3">{path.impact}</p>
+                        <div className="space-y-1">
+                          {(path.steps || []).map((step: string, j: number) => (
+                            <div key={j} className="flex items-start gap-2 text-sm">
+                              <span className="text-primary font-bold shrink-0">{j + 1}.</span>
+                              <span className="text-muted-foreground">{step}</span>
                             </div>
-                            <Badge variant="outline" className="text-xs shrink-0">{finding.confidence}%</Badge>
-                          </div>
-                          <p className="text-sm text-muted-foreground line-clamp-2 mb-2">
-                            {finding.description}
-                          </p>
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Globe className="h-3 w-3 shrink-0" />
-                            <span className="truncate">{finding.endpoint}</span>
-                            {finding.cwe && (
-                              <Badge variant="outline" className="ml-auto text-xs shrink-0">{finding.cwe}</Badge>
-                            )}
-                          </div>
-                        </Card>
-                      ))}
-                      {(!scanResult.findings || scanResult.findings.filter(f => !f.falsePositive).length === 0) && (
-                        <div className="text-center text-muted-foreground py-12">
-                          <CheckCircle className="h-12 w-12 mx-auto mb-3 opacity-30" />
-                          <p>No confirmed vulnerabilities found</p>
+                          ))}
                         </div>
-                      )}
-                    </div>
-                  </ScrollArea>
-                </TabsContent>
-
-                <TabsContent value="attacks">
-                  <ScrollArea className="h-[500px]">
-                    <div className="space-y-3">
-                      {scanResult.attackPaths?.map((path, i) => (
-                        <Card key={i} className="p-4">
-                          <div className="flex items-center gap-2 mb-2">
-                            <Layers className="h-4 w-4 text-primary" />
-                            <span className="font-medium">{path.name}</span>
-                          </div>
-                          <p className="text-sm text-muted-foreground mb-2">{path.impact}</p>
-                          <div className="space-y-1">
-                            {path.steps?.map((step: string, j: number) => (
-                              <div key={j} className="flex items-center gap-2 text-sm">
-                                <span className="text-primary">{j + 1}.</span>
-                                <span>{step}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </Card>
-                      ))}
-                      {(!scanResult.attackPaths || scanResult.attackPaths.length === 0) && (
-                        <div className="text-center text-muted-foreground py-8">
-                          No attack paths identified
-                        </div>
-                      )}
-                    </div>
-                  </ScrollArea>
-                </TabsContent>
-
-                <TabsContent value="recommendations">
-                  <ScrollArea className="h-[500px]">
-                    <div className="space-y-3">
-                      {scanResult.recommendations?.map((rec, i) => (
-                        <Card key={i} className="p-4 flex items-start gap-3">
-                          <CheckCircle className="h-5 w-5 text-green-500 mt-0.5" />
-                          <span>{rec}</span>
-                        </Card>
-                      ))}
-                    </div>
-                  </ScrollArea>
-                </TabsContent>
-              </Tabs>
-            </Card>
-          </div>
-
-          {/* Finding Details */}
-          <div className="lg:col-span-1">
-            <Card className="p-4 h-full">
-              {selectedFinding ? (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <div className="flex items-center gap-2">
-                      <Badge className={getSeverityColor(selectedFinding.severity)}>
-                        {selectedFinding.severity.toUpperCase()}
-                      </Badge>
-                      {(selectedFinding as any).dualConfirmed && (
-                        <Badge variant="outline" className="border-green-500/50 text-green-400 text-xs">✓ Dual-Confirmed</Badge>
-                      )}
-                      <Badge variant="outline" className="text-xs">{selectedFinding.confidence}% confidence</Badge>
-                    </div>
-                    <div className="flex gap-1">
-                      <Button size="icon" variant="ghost" onClick={() => confirmVulnerability(selectedFinding)} title="Confirm">
-                        <ThumbsUp className="h-4 w-4 text-green-500" />
-                      </Button>
-                      <Button size="icon" variant="ghost" onClick={() => markFalsePositive(selectedFinding)} title="False positive">
-                        <ThumbsDown className="h-4 w-4 text-destructive" />
-                      </Button>
-                    </div>
-                  </div>
-                  
-                  <h3 className="font-bold text-lg">{selectedFinding.title}</h3>
-                  
-                  <div className="space-y-2 text-sm">
-                    <div className="flex items-center gap-2">
-                      <Globe className="h-4 w-4 text-muted-foreground" />
-                      <span className="break-all">{selectedFinding.endpoint}</span>
-                    </div>
-                    {selectedFinding.method && (
-                      <div className="flex items-center gap-2">
-                        <Terminal className="h-4 w-4 text-muted-foreground" />
-                        <Badge variant="outline">{selectedFinding.method}</Badge>
-                      </div>
-                    )}
-                    {selectedFinding.cwe && (
-                      <div className="flex items-center gap-2">
-                        <Bug className="h-4 w-4 text-muted-foreground" />
-                        <span>{selectedFinding.cwe}</span>
-                      </div>
-                    )}
-                    {selectedFinding.cvss && (
-                      <div className="flex items-center gap-2">
-                        <AlertTriangle className="h-4 w-4 text-muted-foreground" />
-                        <span>CVSS: {selectedFinding.cvss}</span>
-                      </div>
+                      </Card>
+                    ))}
+                    {(!scanResult.attackPaths || scanResult.attackPaths.length === 0) && (
+                      <EmptyState label="No multi-step attack paths identified" />
                     )}
                   </div>
-
-                  <div>
-                    <h4 className="font-medium mb-1">Description</h4>
-                    <p className="text-sm text-muted-foreground">{selectedFinding.description}</p>
-                  </div>
-
-                  {selectedFinding.payload && (
-                    <div>
-                      <h4 className="font-medium mb-1">Payload</h4>
-                      <code className="block text-xs bg-muted p-2 rounded font-mono break-all">
-                        {selectedFinding.payload}
-                      </code>
-                    </div>
-                  )}
-
-                  {selectedFinding.evidence && (
-                    <div>
-                      <h4 className="font-medium mb-1">Evidence (Method 1)</h4>
-                      <p className="text-sm text-muted-foreground">{selectedFinding.evidence}</p>
-                    </div>
-                  )}
-                  {(selectedFinding as any).evidence2 && (
-                    <div>
-                      <h4 className="font-medium mb-1">Evidence (Method 2 — Dual Confirm)</h4>
-                      <p className="text-sm text-muted-foreground">{(selectedFinding as any).evidence2}</p>
-                    </div>
-                  )}
-
-                  <div>
-                    <h4 className="font-medium mb-1">Remediation</h4>
-                    <p className="text-sm text-muted-foreground">{selectedFinding.remediation}</p>
-                  </div>
-
-                  {selectedFinding.poc && (
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <h4 className="font-medium">POC Command</h4>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => copyPOC(selectedFinding.poc!)}
-                        >
-                          <Copy className="h-3 w-3" />
-                        </Button>
-                      </div>
-                      <pre className="text-xs bg-muted p-2 rounded font-mono overflow-x-auto whitespace-pre-wrap">
-                        {selectedFinding.poc}
-                      </pre>
-                    </div>
-                  )}
-
-                  {selectedFinding.exploitCode && (
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <h4 className="font-medium">Exploit Code</h4>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => copyPOC(selectedFinding.exploitCode!)}
-                        >
-                          <Copy className="h-3 w-3" />
-                        </Button>
-                      </div>
-                      <pre className="text-xs bg-muted p-3 rounded font-mono overflow-x-auto max-h-48">
-                        {selectedFinding.exploitCode}
-                      </pre>
-                    </div>
-                  )}
-
-                  {selectedFinding.mitre && selectedFinding.mitre.length > 0 && (
-                    <div>
-                      <h4 className="font-medium mb-1">MITRE ATT&CK</h4>
-                      <div className="flex flex-wrap gap-1">
-                        {selectedFinding.mitre.map((id) => (
-                          <Badge key={id} variant="outline">{id}</Badge>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="h-full flex items-center justify-center text-muted-foreground">
-                  <div className="text-center">
-                    <Eye className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                    <p>Select a finding to view details</p>
-                  </div>
-                </div>
-              )}
-            </Card>
-          </div>
+                </ScrollArea>
+              </TabsContent>
+            </Tabs>
+          </Card>
         </div>
       )}
 
-      {/* Learning Stats */}
-      <Card className="p-6">
+      {/* ── AI Learning Stats ─────────────────────────────────────────────────── */}
+      <Card className="p-6 border-primary/20">
         <div className="flex items-center gap-3 mb-4">
           <Brain className="h-6 w-6 text-primary" />
           <h3 className="text-lg font-bold">AI Learning Statistics</h3>
+          <Badge variant="outline" className="ml-auto text-xs">
+            Self-improving with each scan
+          </Badge>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card className="p-4 bg-background/50">
-            <div className="text-2xl font-bold text-primary">{learningStats.totalScans}</div>
-            <div className="text-sm text-muted-foreground">Total Scans</div>
-          </Card>
-          <Card className="p-4 bg-background/50">
-            <div className="text-2xl font-bold text-primary">{learningStats.totalFindings}</div>
-            <div className="text-sm text-muted-foreground">Findings Discovered</div>
-          </Card>
-          <Card className="p-4 bg-background/50">
-            <div className="text-2xl font-bold text-primary">{learningStats.learningPoints}</div>
-            <div className="text-sm text-muted-foreground">Learning Data Points</div>
-          </Card>
-          <Card className="p-4 bg-background/50">
-            <div className="text-2xl font-bold text-primary">{learningStats.accuracy}%</div>
-            <div className="text-sm text-muted-foreground">Detection Accuracy</div>
-          </Card>
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+          {[
+            { label: "Total Scans", value: learningStats.totalScans, icon: <Radar className="h-4 w-4" /> },
+            { label: "Findings", value: learningStats.totalFindings, icon: <Bug className="h-4 w-4" /> },
+            { label: "Learning Points", value: learningStats.learningPoints, icon: <Brain className="h-4 w-4" /> },
+            { label: "Confirmed Vulns", value: learningStats.confirmedVulns, icon: <CheckCircle className="h-4 w-4 text-green-400" /> },
+            { label: "FPs Filtered", value: learningStats.falsePositives, icon: <ThumbsDown className="h-4 w-4 text-yellow-400" /> },
+            { label: "AI Accuracy", value: `${learningStats.accuracy}%`, icon: <TrendingUp className="h-4 w-4 text-primary" /> },
+          ].map((s) => (
+            <Card key={s.label} className="p-4 bg-background/50 border-border/30">
+              <div className="flex items-center gap-2 mb-1 text-muted-foreground">{s.icon}</div>
+              <div className="text-2xl font-bold text-primary">{s.value}</div>
+              <div className="text-xs text-muted-foreground">{s.label}</div>
+            </Card>
+          ))}
         </div>
+        <p className="text-xs text-muted-foreground mt-4 leading-relaxed">
+          The AI learns from every scan: confirmed vulnerabilities improve payload selection; marked false positives are excluded
+          from future reports. Use 👍 / 👎 on findings to train the model. Higher learning points = fewer false positives.
+        </p>
       </Card>
     </div>
   );
