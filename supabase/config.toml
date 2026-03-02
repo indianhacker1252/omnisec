@@ -71,3 +71,6 @@ verify_jwt = false
 
 [functions.autonomous-vapt]
 verify_jwt = false
+
+[functions.payload-mutation]
+verify_jwt = false
