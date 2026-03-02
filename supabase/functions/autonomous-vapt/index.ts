@@ -344,17 +344,17 @@ serve(async (req) => {
       await emitProgress('cookie_scan', 8, 60, `Cookie audit done`);
 
       // ═══════════════════════════════════════════════════════════════════
-      // PHASE 9: DEEP INJECTION (forms + params) — OWASP A03
+      // PHASE 9: DEEP INJECTION with MUTATION RETRY ENGINE — OWASP A03
       // ═══════════════════════════════════════════════════════════════════
-      await emitProgress('injection', 9, 62, `Deep injection on ${discoveryResults.forms?.length || 0} forms...`);
-      await emitAIThought(`Testing all form inputs and URL parameters with tech-aware payloads. Using AI-mutated payloads that account for ${detectedTech.join(', ')} stack and previously blocked patterns.`, 'injection', 9);
+      await emitProgress('injection', 9, 62, `Deep injection with mutation engine on ${discoveryResults.forms?.length || 0} forms...`);
+      await emitAIThought(`Starting deep injection with Mutation Retry Engine enabled. If payloads are blocked (HTTP 403/406), AI will mutate and retry up to 3 times per parameter. Randomized delays (2-5s) to evade rate limits.`, 'injection', 9);
       
-      const injectionFindings = await performDeepInjectionTest(
+      const injectionFindings = await performDeepInjectionWithMutation(
         targetUrl, discoveryResults.forms, discoveryResults.params,
-        aiPayloads, previousPayloads
+        aiPayloads, previousPayloads, LOVABLE_API_KEY, emitProgress, emitAIThought, scanId
       );
       allFindings.push(...injectionFindings);
-      await emitProgress('injection', 9, 70, `Injection: ${allFindings.filter(f => !f.falsePositive).length} total findings`);
+      await emitProgress('injection', 9, 70, `Injection + mutation: ${allFindings.filter(f => !f.falsePositive).length} total findings`);
 
       // ═══════════════════════════════════════════════════════════════════
       // PHASE 10: AUTH + IDOR — OWASP A01, A07
@@ -1295,7 +1295,207 @@ async function scanCookieSecurity(targetUrl: string): Promise<Finding[]> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// DEEP INJECTION (forms + params)
+// DEEP INJECTION WITH MUTATION RETRY ENGINE
+// ═══════════════════════════════════════════════════════════════════════════════
+async function performDeepInjectionWithMutation(
+  target: URL, forms: any[], params: string[],
+  payloads: Record<string, string[]>, failedPayloads: string[],
+  apiKey: string | undefined,
+  emitProgress: (phase: string, num: number, progress: number, msg: string, extra?: any) => Promise<void>,
+  emitAIThought: (thought: string, phase: string, num: number) => Promise<void>,
+  scanId: string
+): Promise<Finding[]> {
+  const findings: Finding[] = [];
+  const MAX_MUTATION_RETRIES = 3;
+  const sqlErrors = ['sql syntax', 'mysql_fetch', 'pg_query', 'sqlite', 'ora-', 'sql error', 'odbc',
+    'syntax error', 'unclosed quotation', 'warning: mysql', 'you have an error in your sql'];
+
+  // ── Mutation helper ──────────────────────────────────────────────────
+  const mutatePayload = async (original: string, context: string, reason: string): Promise<string> => {
+    if (apiKey) {
+      try {
+        const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash",
+            messages: [
+              { role: "system", content: "Expert pentester. Generate one WAF-evasion payload. Output ONLY the raw payload string, no markdown." },
+              { role: "user", content: `Payload '${original}' blocked on ${context}. Error: ${reason}. Generate obfuscated equivalent.` }
+            ],
+            temperature: 0.8, max_tokens: 150,
+          }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const content = (data.choices?.[0]?.message?.content || '').trim().replace(/^[`'"]+|[`'"]+$/g, '');
+          if (content && content.length > 2 && content.length < 500 && !content.startsWith('```')) return content;
+        }
+      } catch {}
+    }
+    // Fallback mutations
+    const techniques = [
+      (p: string) => p.split('').map((c, i) => i % 2 === 0 ? c.toUpperCase() : c.toLowerCase()).join(''),
+      (p: string) => p.replace(/ /g, '/**/'),
+      (p: string) => p.replace(/ /g, '%09'),
+      (p: string) => p.replace(/[<>"']/g, c => '%25' + c.charCodeAt(0).toString(16)),
+    ];
+    return techniques[Math.floor(Math.random() * techniques.length)](original);
+  };
+
+  // ── Emit mutation event ──────────────────────────────────────────────
+  const emitMutationEvent = async (type: string, data: any) => {
+    try {
+      await emitProgress('mutation', 15, -1, `🧬 ${type}: ${JSON.stringify(data).slice(0, 300)}`, {});
+    } catch {}
+  };
+
+  // ── Fire payload with mutation retry loop ─────────────────────────────
+  const fireWithRetry = async (
+    url: string, param: string, initialPayload: string, method: string, inputName: string
+  ): Promise<{ finding: Finding | null; chain: any }> => {
+    let currentPayload = initialPayload;
+    const chain = { attempts: [] as any[], status: 'pending' as string };
+
+    for (let attempt = 0; attempt <= MAX_MUTATION_RETRIES; attempt++) {
+      try {
+        let response: Response;
+        if (method === 'GET') {
+          const testUrl = new URL(url);
+          testUrl.searchParams.set(param, currentPayload);
+          response = await fetchWithTimeout(testUrl.toString(), 10000);
+        } else {
+          const formData = new URLSearchParams();
+          formData.set(param, currentPayload);
+          response = await fetchWithTimeout(url, 10000, {
+            method: 'POST',
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: formData.toString()
+          });
+        }
+
+        const responseText = await response.text();
+        const status = response.status;
+        const blocked = status === 403 || status === 406 || status === 429
+          || responseText.toLowerCase().includes('blocked')
+          || responseText.toLowerCase().includes('waf');
+
+        chain.attempts.push({ payload: currentPayload, status, blocked, attempt });
+
+        if (!blocked) {
+          // Check for actual vulnerability indicators
+          const lowerBody = responseText.toLowerCase();
+
+          // XSS
+          if (responseText.includes(currentPayload) || responseText.includes('onerror=') || responseText.includes('onload=')) {
+            chain.status = 'success';
+            await emitMutationEvent('MUTATION_SUCCESS', { parameter: param, payload: currentPayload, attempt: attempt + 1 });
+            return {
+              chain,
+              finding: {
+                id: `MUT-XSS-${Date.now()}-${param}`, severity: 'high' as const,
+                title: `XSS in "${inputName || param}" ${attempt > 0 ? `[WAF Bypassed, ${attempt + 1} mutations]` : ''}`,
+                description: `Payload reflected${attempt > 0 ? ` after ${attempt + 1} mutation attempts. AI-mutated payload evaded WAF.` : '.'}`,
+                endpoint: url, method, payload: currentPayload, owasp: 'A03:2021',
+                evidence: `Reflected: ${currentPayload.slice(0, 100)}`,
+                evidence2: attempt > 0 ? `Original "${initialPayload}" was blocked` : undefined,
+                dualConfirmed: attempt > 0, remediation: 'Output encoding + CSP.',
+                cwe: 'CWE-79', cvss: 6.1, confidence: attempt > 0 ? 95 : 85, category: 'injection',
+                retryCount: attempt + 1,
+                mutationChain: chain.attempts,
+              }
+            };
+          }
+
+          // SQLi
+          if (sqlErrors.some(e => lowerBody.includes(e))) {
+            chain.status = 'success';
+            await emitMutationEvent('MUTATION_SUCCESS', { parameter: param, payload: currentPayload, attempt: attempt + 1 });
+            return {
+              chain,
+              finding: {
+                id: `MUT-SQLI-${Date.now()}-${param}`, severity: 'critical' as const,
+                title: `SQL Injection in "${inputName || param}" ${attempt > 0 ? `[WAF Bypassed]` : ''}`,
+                description: `SQL error triggered${attempt > 0 ? ` after ${attempt + 1} mutation attempts.` : '.'}`,
+                endpoint: url, method, payload: currentPayload, owasp: 'A03:2021',
+                evidence: `SQL error: ${responseText.slice(0, 150)}`,
+                evidence2: attempt > 0 ? `Mutated from "${initialPayload}"` : undefined,
+                dualConfirmed: true, remediation: 'Parameterized queries.',
+                cwe: 'CWE-89', cvss: 9.8, confidence: 97, category: 'injection',
+                retryCount: attempt + 1,
+                mutationChain: chain.attempts,
+              }
+            };
+          }
+
+          // No vuln indicator — payload got through but target isn't vulnerable
+          chain.status = 'no_vuln';
+          return { chain, finding: null };
+        }
+
+        // ── Blocked — mutate ──────────────────────────────────────────
+        if (attempt >= MAX_MUTATION_RETRIES) {
+          chain.status = 'defended';
+          await emitMutationEvent('MAX_RETRIES_REACHED', { parameter: param, totalAttempts: attempt + 1 });
+          await emitAIThought(`Parameter "${param}" is well-defended. ${attempt + 1} payloads blocked by WAF/filter. Marking as defended.`, 'injection', 9);
+          return { chain, finding: null };
+        }
+
+        await emitMutationEvent('MUTATION_START', { parameter: param, originalPayload: currentPayload, attempt: attempt + 1, reason: `HTTP ${status}` });
+        await emitAIThought(`Payload blocked (HTTP ${status}) on "${param}". Mutating attempt ${attempt + 1}/${MAX_MUTATION_RETRIES}...`, 'injection', 9);
+
+        currentPayload = await mutatePayload(currentPayload, `${url} param=${param}`, `HTTP ${status}`);
+
+        // Randomized delay 2-5s
+        const delay = 2000 + Math.floor(Math.random() * 3000);
+        await new Promise(r => setTimeout(r, delay));
+
+      } catch (error: any) {
+        chain.attempts.push({ payload: currentPayload, status: 0, blocked: true, attempt, error: error.message });
+        if (attempt >= MAX_MUTATION_RETRIES) {
+          chain.status = 'defended';
+          await emitMutationEvent('MAX_RETRIES_REACHED', { parameter: param, totalAttempts: attempt + 1, reason: 'Connection errors' });
+          return { chain, finding: null };
+        }
+        currentPayload = await mutatePayload(currentPayload, url, error.message);
+        await new Promise(r => setTimeout(r, 2000 + Math.random() * 3000));
+      }
+    }
+    return { chain, finding: null };
+  };
+
+  // ── Test forms ──────────────────────────────────────────────────────
+  for (const form of (forms || []).slice(0, 10)) {
+    const formUrl = form.action ? new URL(form.action, target).toString() : target.toString();
+    for (const input of form.inputs) {
+      // XSS with mutation retry
+      for (const payload of (payloads.a03_xss || []).slice(0, 3)) {
+        if (failedPayloads.includes(payload)) continue;
+        const { finding } = await fireWithRetry(formUrl, input.name, payload, form.method || 'GET', input.name);
+        if (finding) { findings.push(finding); break; }
+      }
+      // SQLi with mutation retry
+      for (const payload of (payloads.a03_sqli || []).slice(0, 3)) {
+        if (failedPayloads.includes(payload)) continue;
+        const { finding } = await fireWithRetry(formUrl, input.name, payload, form.method || 'GET', input.name);
+        if (finding) { findings.push(finding); break; }
+      }
+    }
+  }
+
+  // ── Test URL params with SSRF ────────────────────────────────────────
+  for (const param of (params || []).slice(0, 8)) {
+    for (const payload of (payloads.a10_ssrf || []).slice(0, 2)) {
+      const { finding } = await fireWithRetry(target.toString(), param, payload, 'GET', param);
+      if (finding) { findings.push(finding); break; }
+    }
+  }
+
+  return findings;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DEEP INJECTION (legacy, kept for compatibility)
 // ═══════════════════════════════════════════════════════════════════════════════
 async function performDeepInjectionTest(
   target: URL, forms: any[], params: string[],

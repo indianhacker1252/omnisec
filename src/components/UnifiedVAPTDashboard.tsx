@@ -24,6 +24,7 @@ import { useToast } from "@/hooks/use-toast";
 import { SubdomainAttackMap } from "@/components/SubdomainAttackMap";
 import { FindingDetailModal } from "@/components/FindingDetailModal";
 import { TargetTreeVisualization } from "@/components/TargetTreeVisualization";
+import { MutationMatrix } from "@/components/MutationMatrix";
 import {
   Brain, Zap, Target, Shield, Globe, Play, RefreshCw, AlertTriangle,
   CheckCircle, TrendingUp, Activity, Eye, ThumbsUp, ThumbsDown,
@@ -478,6 +479,11 @@ export const UnifiedVAPTDashboard = () => {
           </div>
         )}
       </Card>
+
+      {/* Mutation Matrix */}
+      {(isScanning || liveLogs.some(l => l.message?.includes('🧬'))) && (
+        <MutationMatrix scanId={undefined} isActive={isScanning} />
+      )}
 
       {/* AI Thought Chatbox + Live Logs (side by side) */}
       {(isScanning || liveLogs.length > 0) && (
