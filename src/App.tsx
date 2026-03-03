@@ -41,18 +41,44 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    let mounted = true;
+
+    supabase.auth.getSession().then(({ data: { session }, error }) => {
+      if (!mounted) return;
+      if (error) {
+        console.warn("Session restore failed:", error.message);
+        // Clear corrupted session data
+        supabase.auth.signOut().catch(() => {});
+      }
       setSession(session);
       setLoading(false);
+    }).catch(() => {
+      if (mounted) {
+        setSession(null);
+        setLoading(false);
+      }
     });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
+      if (mounted) setSession(session);
     });
 
-    return () => subscription.unsubscribe();
+    // Safety timeout - never stay stuck on initializing
+    const timeout = setTimeout(() => {
+      if (mounted && loading) {
+        console.warn("Auth initialization timed out");
+        setSession(null);
+        setLoading(false);
+      }
+    }, 5000);
+
+    return () => {
+      mounted = false;
+      clearTimeout(timeout);
+      subscription.unsubscribe();
+    };
   }, []);
 
   if (loading) {
