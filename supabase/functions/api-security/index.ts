@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -25,38 +26,66 @@ serve(async (req) => {
   }
 
   try {
+    // Authentication check
+    const supabaseClient = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
+    );
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     const body = await req.json();
     const target = body.target;
-    // Support both apiType and scanType params
     const apiType = body.apiType || body.scanType || "rest";
     
-    if (!target) {
+    if (!target || typeof target !== "string") {
       return new Response(JSON.stringify({ error: "Target is required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (target.length > 500) {
+      return new Response(JSON.stringify({ error: "Target too long (max 500 chars)" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // SSRF protection
+    let targetUrl: URL;
+    try {
+      targetUrl = new URL(target.startsWith("http") ? target : `https://${target}`);
+    } catch {
+      return new Response(JSON.stringify({ error: "Invalid URL format" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const blockedPatterns = [
+      /^10\./, /^172\.(1[6-9]|2[0-9]|3[01])\./, /^192\.168\./, /^127\./,
+      /^169\.254\./, /^0\./, /localhost/i, /metadata/i, /internal/i,
+    ];
+    if (blockedPatterns.some(p => p.test(targetUrl.hostname))) {
+      return new Response(JSON.stringify({ error: "Internal targets not allowed" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
       return new Response(JSON.stringify({ error: "AI service not configured" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    console.log(`Starting ${apiType} API security scan on: ${target}`);
+    console.log(`[API-SEC] User ${user.id} scanning ${apiType} on: ${target}`);
 
-    // First do real HTTP probing
     const realFindings: APIFinding[] = [];
-    let targetUrl: URL;
-    try {
-      targetUrl = new URL(target.startsWith("http") ? target : `https://${target}`);
-    } catch {
-      targetUrl = new URL(`https://${target}`);
-    }
 
-    // Probe common API paths
     const apiPaths = [
       "/api", "/api/v1", "/api/v2", "/graphql", "/swagger", "/swagger.json",
       "/openapi.json", "/api-docs", "/api/docs", "/.well-known/openid-configuration",
@@ -66,7 +95,6 @@ serve(async (req) => {
 
     const probeResults: Array<{path: string; status: number; headers: Record<string, string>; bodySnippet: string}> = [];
 
-    // Parallel probe with timeout
     const probePromises = apiPaths.map(async (path) => {
       try {
         const controller = new AbortController();
@@ -92,39 +120,36 @@ serve(async (req) => {
           });
         }
 
-        // Check for exposed API docs
         if (resp.status === 200 && (path.includes("swagger") || path.includes("openapi") || path.includes("api-docs"))) {
           realFindings.push({
             id: `API-REAL-${realFindings.length + 1}`,
             category: "API Documentation",
             severity: "medium",
             title: `API Documentation Exposed: ${path}`,
-            description: `API documentation is publicly accessible at ${path}. This reveals endpoint structure, parameters, and data models to attackers.`,
+            description: `API documentation is publicly accessible at ${path}.`,
             endpoint: probeUrl,
             method: "GET",
             owasp: "API9:2023 - Improper Inventory Management",
-            remediation: "Restrict API documentation access to authenticated users or internal networks only.",
+            remediation: "Restrict API documentation access to authenticated users.",
             poc: `curl -s "${probeUrl}" | head -50`
           });
         }
 
-        // Check for user enumeration
         if (resp.status === 200 && path.includes("users") && snippet.includes("{")) {
           realFindings.push({
             id: `API-REAL-${realFindings.length + 1}`,
             category: "Information Disclosure",
             severity: "high",
             title: `User Enumeration via ${path}`,
-            description: `The ${path} endpoint returns user data without authentication. Attackers can enumerate users.`,
+            description: `The ${path} endpoint returns user data without authentication.`,
             endpoint: probeUrl,
             method: "GET",
             owasp: "API1:2023 - Broken Object Level Authorization",
-            remediation: "Require authentication for user listing endpoints. Implement proper access controls.",
+            remediation: "Require authentication for user listing endpoints.",
             poc: `curl -s "${probeUrl}"`
           });
         }
 
-        // Check for GraphQL introspection
         if (resp.status === 200 && path === "/graphql") {
           try {
             const introspectionResp = await fetch(probeUrl, {
@@ -139,17 +164,16 @@ serve(async (req) => {
                 category: "GraphQL Security",
                 severity: "medium",
                 title: "GraphQL Introspection Enabled",
-                description: "GraphQL introspection is enabled, allowing attackers to discover the entire API schema.",
+                description: "GraphQL introspection is enabled.",
                 endpoint: probeUrl,
                 method: "POST",
-                remediation: "Disable introspection in production. Use schema whitelisting.",
+                remediation: "Disable introspection in production.",
                 poc: `curl -X POST "${probeUrl}" -H "Content-Type: application/json" -d '{"query":"{ __schema { types { name } } }"}'`
               });
             }
           } catch { /* ignore */ }
         }
 
-        // Check CORS misconfiguration
         if (resp.status === 200) {
           const acaoHeader = resp.headers.get("access-control-allow-origin");
           if (acaoHeader === "*") {
@@ -158,7 +182,7 @@ serve(async (req) => {
               category: "CORS",
               severity: "medium",
               title: `Permissive CORS on ${path}`,
-              description: `The endpoint at ${path} allows requests from any origin (Access-Control-Allow-Origin: *). This could enable cross-origin data theft.`,
+              description: `The endpoint at ${path} allows requests from any origin.`,
               endpoint: probeUrl,
               method: "GET",
               owasp: "API8:2023 - Security Misconfiguration",
@@ -167,12 +191,11 @@ serve(async (req) => {
             });
           }
         }
-      } catch { /* timeout or error - path not accessible */ }
+      } catch { /* timeout or error */ }
     });
 
     await Promise.all(probePromises);
 
-    // Test for missing rate limiting
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
@@ -184,7 +207,7 @@ serve(async (req) => {
           headers: { "User-Agent": "OmniSec-API-Scanner/1.0" }
         });
         responses.push(resp.status);
-        await resp.text(); // consume body
+        await resp.text();
       }
       clearTimeout(timeoutId);
 
@@ -194,17 +217,16 @@ serve(async (req) => {
           category: "Rate Limiting",
           severity: "medium",
           title: "No Rate Limiting Detected",
-          description: "5 rapid requests all returned 200. No rate limiting or throttling detected, making the API vulnerable to brute-force and abuse.",
+          description: "5 rapid requests all returned 200. No rate limiting detected.",
           endpoint: targetUrl.toString(),
           method: "GET",
           owasp: "API4:2023 - Unrestricted Resource Consumption",
-          remediation: "Implement rate limiting (e.g., 100 requests/minute per IP). Use API keys for tracking.",
+          remediation: "Implement rate limiting.",
           poc: `for i in {1..10}; do curl -s -o /dev/null -w "%{http_code}" "${targetUrl}"; done`
         });
       }
     } catch { /* ignore */ }
 
-    // Use AI to analyze the probed data for deeper findings
     const systemPrompt = `You are an expert API security analyst. Based on the real probe results below, identify ONLY genuine security issues. Do NOT fabricate findings.
 
 Target: ${target}
@@ -213,11 +235,11 @@ API Type: ${apiType}
 Real probe results:
 ${JSON.stringify(probeResults.slice(0, 10), null, 2)}
 
-Already found ${realFindings.length} real issues. Add ONLY additional findings that are supported by the probe data above.
+Already found ${realFindings.length} real issues. Add ONLY additional findings supported by the probe data.
 
 Return JSON: { "findings": [{ "id": "API-AI-N", "category": "string", "severity": "critical|high|medium|low|info", "title": "string", "description": "string", "endpoint": "string", "method": "GET|POST|PUT|DELETE", "owasp": "string", "remediation": "string", "poc": "curl command or step-by-step" }] }
 
-IMPORTANT: Only return findings backed by evidence from the probe results. No guessing.`;
+IMPORTANT: Only return findings backed by evidence from the probe results.`;
 
     let aiFindings: APIFinding[] = [];
     try {
@@ -259,7 +281,7 @@ IMPORTANT: Only return findings backed by evidence from the probe results. No gu
     }
 
     const allFindings = [...realFindings, ...aiFindings];
-    console.log(`API security scan complete: ${allFindings.length} findings (${realFindings.length} real, ${aiFindings.length} AI-analyzed)`);
+    console.log(`API security scan complete: ${allFindings.length} findings`);
 
     const summary = {
       critical: allFindings.filter(f => f.severity === "critical").length,
@@ -270,11 +292,7 @@ IMPORTANT: Only return findings backed by evidence from the probe results. No gu
     };
 
     return new Response(JSON.stringify({
-      success: true,
-      apiType,
-      target,
-      findings: allFindings,
-      summary,
+      success: true, apiType, target, findings: allFindings, summary,
       probeResults: probeResults.map(p => ({ path: p.path, status: p.status })),
       scanTime: Date.now(),
     }), {
@@ -284,11 +302,10 @@ IMPORTANT: Only return findings backed by evidence from the probe results. No gu
   } catch (error) {
     console.error("API security scan error:", error);
     return new Response(JSON.stringify({ 
-      error: error instanceof Error ? error.message : "Unknown error",
-      success: false 
+      error: error instanceof Error ? error.message : "Unknown error", success: false 
     }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
+
