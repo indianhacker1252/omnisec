@@ -23,61 +23,56 @@ export const useAuthReady = () => {
   useEffect(() => {
     let mounted = true;
 
-    const recoverAuthState = async () => {
-      clearStaleAuthStorage();
-      await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
-
-      if (!mounted) return;
-      setSession(null);
-      setIsReady(true);
-    };
-
-    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
-      const reason = event.reason as { message?: string; name?: string } | undefined;
-      const message = reason?.message || "";
-      const name = reason?.name || "";
-
-      if (
-        message.includes("Lock broken by another request with the 'steal' option") ||
-        name.includes("AuthRetryableFetchError") ||
-        message.includes("AuthRetryableFetchError") ||
-        message.includes("Failed to fetch")
-      ) {
-        event.preventDefault();
-        void recoverAuthState();
-      }
-    };
-
-    window.addEventListener("unhandledrejection", handleUnhandledRejection);
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const applySessionState = (nextSession: Session | null) => {
       if (!mounted) return;
       setSession(nextSession);
       setIsReady(true);
-    });
 
-    Promise.race([
-      supabase.auth.getSession(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Auth init timeout")), AUTH_INIT_TIMEOUT_MS),
-      ),
-    ])
-      .then((result) => {
-        if (!mounted) return;
-        const data = (result as { data?: { session?: Session | null } }).data;
-        setSession(data?.session ?? null);
-        setIsReady(true);
-      })
-      .catch(() => {
-        void recoverAuthState();
+      if (nextSession) {
+        supabase.auth.startAutoRefresh();
+      } else {
+        supabase.auth.stopAutoRefresh();
+      }
+    };
+
+    const initializeAuth = async () => {
+      try {
+        const result = (await Promise.race([
+          supabase.auth.getSession(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Auth init timeout")), AUTH_INIT_TIMEOUT_MS),
+          ),
+        ])) as { data?: { session?: Session | null } };
+
+        applySessionState(result.data?.session ?? null);
+      } catch {
+        clearStaleAuthStorage();
+        await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+        applySessionState(null);
+      }
+
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+        applySessionState(nextSession);
       });
+
+      if (!mounted) {
+        subscription.unsubscribe();
+      }
+
+      return subscription;
+    };
+
+    let authSubscription: { unsubscribe: () => void } | null = null;
+
+    void initializeAuth().then((subscription) => {
+      authSubscription = subscription;
+    });
 
     return () => {
       mounted = false;
-      window.removeEventListener("unhandledrejection", handleUnhandledRejection);
-      subscription.unsubscribe();
+      authSubscription?.unsubscribe();
     };
   }, []);
 
