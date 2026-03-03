@@ -114,19 +114,23 @@ export const CommandHeader = () => {
 
   const handleSignOut = async () => {
     const { error } = await supabase.auth.signOut();
+
     if (error) {
-      toast({
-        title: "Error",
-        description: "Failed to sign out",
-        variant: "destructive",
-      });
-    } else {
+      // Fallback to local session cleanup when network/logout endpoint is unavailable
+      await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
       toast({
         title: "Signed Out",
-        description: "You have been signed out successfully",
+        description: "Session cleared locally",
       });
       navigate("/auth");
+      return;
     }
+
+    toast({
+      title: "Signed Out",
+      description: "You have been signed out successfully",
+    });
+    navigate("/auth");
   };
 
   const getSeverityVariant = (severity: string) => {

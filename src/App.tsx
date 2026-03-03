@@ -3,9 +3,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
-import { Session } from "@supabase/supabase-js";
+import { useAuthReady } from "@/hooks/useAuthReady";
 import Index from "./pages/Index";
 import ReconModule from "./pages/ReconModule";
 import VulnModule from "./pages/VulnModule";
@@ -37,51 +35,9 @@ import UnifiedVAPTPage from "./pages/UnifiedVAPTPage";
 const queryClient = new QueryClient();
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { session, isReady } = useAuthReady();
 
-  useEffect(() => {
-    let mounted = true;
-
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
-      if (!mounted) return;
-      if (error) {
-        console.warn("Session restore failed:", error.message);
-        // Clear corrupted session data
-        supabase.auth.signOut().catch(() => {});
-      }
-      setSession(session);
-      setLoading(false);
-    }).catch(() => {
-      if (mounted) {
-        setSession(null);
-        setLoading(false);
-      }
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (mounted) setSession(session);
-    });
-
-    // Safety timeout - never stay stuck on initializing
-    const timeout = setTimeout(() => {
-      if (mounted && loading) {
-        console.warn("Auth initialization timed out");
-        setSession(null);
-        setLoading(false);
-      }
-    }, 5000);
-
-    return () => {
-      mounted = false;
-      clearTimeout(timeout);
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  if (loading) {
+  if (!isReady) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-lg font-mono">Initializing...</div>
