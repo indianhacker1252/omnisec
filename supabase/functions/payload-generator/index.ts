@@ -26,20 +26,7 @@ serve(async (req) => {
       });
     }
 
-    // Check admin role (payload generation is admin-only)
-    const { data: isAdmin } = await supabaseClient.rpc("has_role", {
-      _user_id: user.id,
-      _role: "admin"
-    });
-
-    if (!isAdmin) {
-      return new Response(JSON.stringify({ 
-        error: "Admin privileges required for payload generation" 
-      }), {
-        status: 403,
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
-      });
-    }
+    // All authenticated users can generate payloads (auth enforced above)
 
     const { type, target, port, options } = await req.json();
     
