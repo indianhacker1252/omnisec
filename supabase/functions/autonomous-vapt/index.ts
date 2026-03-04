@@ -811,6 +811,60 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
     console.error('Main page discovery error:', e.message);
   }
 
+  // Deep crawl: follow discovered links to find 2nd-level pages with parameters
+  const crawledUrls = new Set<string>();
+  const linksToCrawl = results.endpoints.filter((ep: string) => {
+    try { return new URL(ep).hostname === target.hostname; } catch { return false; }
+  }).slice(0, 30);
+
+  for (let i = 0; i < linksToCrawl.length; i += 8) {
+    const batch = linksToCrawl.slice(i, i + 8);
+    await Promise.all(batch.map(async (link: string) => {
+      if (crawledUrls.has(link)) return;
+      crawledUrls.add(link);
+      try {
+        const resp = await fetchWithTimeout(link, 6000);
+        if (!resp.ok) return;
+        const html2 = await resp.text();
+        const innerLinks = html2.match(/(?:href|src|action)=["']([^"'#]+)["']/gi) || [];
+        for (const match of innerLinks) {
+          const url = match.replace(/^(?:href|src|action)=["']/i, '').replace(/["']$/, '');
+          if (url.startsWith('javascript:') || url.startsWith('mailto:') || url.startsWith('#')) continue;
+          try {
+            const fullUrl = new URL(url, link).toString();
+            if (fullUrl.includes(target.hostname) && !results.endpoints.includes(fullUrl)) {
+              results.endpoints.push(fullUrl);
+            }
+          } catch {}
+        }
+        // Extract more forms from inner pages
+        const innerForms = html2.match(/<form[^>]*>[\s\S]*?<\/form>/gi) || [];
+        for (const form of innerForms.slice(0, 5)) {
+          const action = form.match(/action=["']([^"']+)["']/i)?.[1] || '';
+          const method = form.match(/method=["']([^"']+)["']/i)?.[1] || 'GET';
+          const inputs = (form.match(/<input[^>]+>/gi) || []).map((inp: string) => {
+            const name = inp.match(/name=["']([^"']+)["']/i)?.[1];
+            const type = inp.match(/type=["']([^"']+)["']/i)?.[1] || 'text';
+            return { name, type };
+          }).filter((i: any) => i.name);
+          if (inputs.length > 0) {
+            const resolvedAction = action ? new URL(action, link).toString() : link;
+            results.forms.push({ id: results.forms.length, action: resolvedAction, method: method.toUpperCase(), inputs });
+          }
+        }
+        // Extract URL parameters from inner pages
+        const innerParamMatches = html2.match(/\?[^"'\s><]+/g) || [];
+        for (const param of innerParamMatches) {
+          const pairs = param.slice(1).split('&');
+          for (const pair of pairs) {
+            const [key] = pair.split('=');
+            if (key && !results.params.includes(key)) results.params.push(key);
+          }
+        }
+      } catch {}
+    }));
+  }
+
   // Common path discovery
   const commonPaths = [
     '/api', '/api/v1', '/api/v2', '/graphql', '/rest',
@@ -821,7 +875,9 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
     '/health', '/healthz', '/metrics', '/debug', '/test',
     '/backup', '/upload', '/uploads', '/files', '/static',
     '/.svn/entries', '/.DS_Store', '/web.config', '/crossdomain.xml',
-    '/wp-config.php.bak', '/.htpasswd', '/config.yml'
+    '/wp-config.php.bak', '/.htpasswd', '/config.yml',
+    '/search', '/product', '/item', '/category', '/user', '/comment',
+    '/cgi-bin/', '/images/', '/includes/', '/js/',
   ];
 
   for (let i = 0; i < commonPaths.length; i += 10) {
