@@ -14,6 +14,111 @@ export type Database = {
   }
   public: {
     Tables: {
+      recon_findings: {
+        Row: {
+          confidence_score: number | null
+          created_at: string
+          description: string | null
+          evidence: Json | null
+          finding_type: string
+          first_seen: string
+          hash_signature: string
+          id: string
+          last_seen: string
+          raw_data: Json | null
+          seen_count: number
+          severity: string
+          source_module: string | null
+          target_host: string
+          title: string
+          url_path: string | null
+          verification_status: string
+          vulnerable_parameter: string | null
+        }
+        Insert: {
+          confidence_score?: number | null
+          created_at?: string
+          description?: string | null
+          evidence?: Json | null
+          finding_type: string
+          first_seen?: string
+          hash_signature: string
+          id?: string
+          last_seen?: string
+          raw_data?: Json | null
+          seen_count?: number
+          severity?: string
+          source_module?: string | null
+          target_host: string
+          title: string
+          url_path?: string | null
+          verification_status?: string
+          vulnerable_parameter?: string | null
+        }
+        Update: {
+          confidence_score?: number | null
+          created_at?: string
+          description?: string | null
+          evidence?: Json | null
+          finding_type?: string
+          first_seen?: string
+          hash_signature?: string
+          id?: string
+          last_seen?: string
+          raw_data?: Json | null
+          seen_count?: number
+          severity?: string
+          source_module?: string | null
+          target_host?: string
+          title?: string
+          url_path?: string | null
+          verification_status?: string
+          vulnerable_parameter?: string | null
+        }
+        Relationships: []
+      }
+      recon_queue: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          domain: string
+          error_message: string | null
+          id: string
+          ip_address: string | null
+          parent_domain: string | null
+          scan_phase: string | null
+          started_at: string | null
+          status: string
+          subdomain: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          domain: string
+          error_message?: string | null
+          id?: string
+          ip_address?: string | null
+          parent_domain?: string | null
+          scan_phase?: string | null
+          started_at?: string | null
+          status?: string
+          subdomain: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          domain?: string
+          error_message?: string | null
+          id?: string
+          ip_address?: string | null
+          parent_domain?: string | null
+          scan_phase?: string | null
+          started_at?: string | null
+          status?: string
+          subdomain?: string
+        }
+        Relationships: []
+      }
       scan_history: {
         Row: {
           completed_at: string | null
