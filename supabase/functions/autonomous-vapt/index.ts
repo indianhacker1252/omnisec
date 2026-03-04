@@ -939,6 +939,7 @@ async function assessEndpointOWASP(
     const response = await fetchWithTimeout(endpoint, 15000);
     const status = response.status;
     const responseText = await response.text();
+    const baselineLength = responseText.length;
 
     // ── A01: Broken Access Control ──────────────────────────────────────
     if ((endpoint.includes('.git') || endpoint.includes('.env') || endpoint.includes('config') || endpoint.includes('.svn') || endpoint.includes('.htpasswd')) && status === 200) {
@@ -988,89 +989,177 @@ async function assessEndpointOWASP(
     }
 
     // ── A03: Injection (XSS + SQLi via URL params) ──────────────────────
+    // Collect params: existing ones + common injectable param names to fuzz
+    const commonInjectableParams = ['id', 'cat', 'page', 'search', 'q', 'query', 'file', 'name', 'user', 'item', 
+      'product', 'category', 'artist', 'title', 'sort', 'order', 'dir', 'lang', 'type', 'action',
+      'url', 'path', 'redirect', 'return', 'next', 'callback', 'ref', 'img', 'src', 'template'];
+
     try {
       const parsedUrl = new URL(endpoint);
-      const params = Array.from(parsedUrl.searchParams.keys());
+      const existingParams = Array.from(parsedUrl.searchParams.keys());
+      
+      // For existing params, test injection directly
+      // For pages without params, try common injectable params to discover hidden injection points
+      const paramsToTest = existingParams.length > 0 ? existingParams : [];
+      
+      // Also fuzz common params on every page to find hidden injection points
+      const fuzzParams = commonInjectableParams.filter(p => !existingParams.includes(p));
 
-      for (const param of params.slice(0, 5)) {
-        // XSS dual-confirm
-        const xssPayloads = payloads.a03_xss || [];
-        if (xssPayloads.length >= 2) {
-          const xssUrl1 = new URL(endpoint);
-          xssUrl1.searchParams.set(param, xssPayloads[0]);
-          const xssResp1 = await fetchWithTimeout(xssUrl1.toString(), 8000);
-          const xssBody1 = await xssResp1.text();
-          const reflected1 = xssBody1.includes(xssPayloads[0]) || xssBody1.includes('onerror=');
+      // Combine: existing params first, then fuzz params
+      const allParams = [...paramsToTest, ...fuzzParams.slice(0, 15)];
 
-          if (reflected1) {
-            const xssUrl2 = new URL(endpoint);
-            xssUrl2.searchParams.set(param, xssPayloads[1]);
-            const xssResp2 = await fetchWithTimeout(xssUrl2.toString(), 8000);
-            const xssBody2 = await xssResp2.text();
-            const reflected2 = xssBody2.includes(xssPayloads[1]) || xssBody2.includes('onload=');
+      const sqlErrors = ['sql syntax', 'mysql_fetch', 'pg_query', 'sqlite', 'ora-', 'sql error', 'odbc',
+        'syntax error', 'unclosed quotation', 'warning: mysql', 'you have an error in your sql',
+        'microsoft sql', 'mysql_num_rows', 'supplied argument is not', 'pg_exec', 'mysql_result',
+        'Unclosed quotation mark', 'mssql_query', 'ORA-01756', 'SQLSTATE', 'PDOException',
+        'mysql_connect', 'Access denied for user', 'Error en la consulta'];
 
-            if (reflected2) {
-              findings.push({
-                id: `A03-XSS-${Date.now()}-${param}`, severity: 'high',
-                title: `Reflected XSS in "${param}" [DUAL-CONFIRMED]`,
-                description: `Two independent XSS probes reflected without sanitization in parameter "${param}".`,
-                endpoint: xssUrl1.toString(), method: 'GET', owasp: 'A03:2021',
-                payload: xssPayloads[0],
-                evidence: `Probe 1 reflected: ${xssPayloads[0]}`,
-                evidence2: `Probe 2 reflected: ${xssPayloads[1]}`,
-                dualConfirmed: true, remediation: 'Implement output encoding and CSP.',
-                cwe: 'CWE-79', cvss: 6.1, mitre: ['T1059.007'], confidence: 96, category: 'injection',
-                poc: `curl -s "${xssUrl1.toString()}" | grep -o 'onerror=.*'`
-              });
-            }
-          }
-        }
+      for (const param of allParams.slice(0, 20)) {
+        // === BLIND SQLi: Baseline comparison ===
+        try {
+          // Get baseline response with normal value
+          const baseUrl = new URL(endpoint);
+          baseUrl.searchParams.set(param, '1');
+          const baseResp = await fetchWithTimeout(baseUrl.toString(), 8000);
+          const baseBody = await baseResp.text();
+          const baseLen = baseBody.length;
 
-        // SQLi dual-confirm
-        const sqliPayloads = payloads.a03_sqli || [];
-        const sqlErrors = ['sql syntax', 'mysql_fetch', 'pg_query', 'sqlite', 'ora-', 'sql error', 'odbc',
-          'syntax error', 'unclosed quotation', 'warning: mysql', 'you have an error in your sql'];
-
-        if (sqliPayloads.length >= 2) {
+          // Test 1: Error-based SQLi with single quote
           const sqliUrl1 = new URL(endpoint);
-          sqliUrl1.searchParams.set(param, sqliPayloads[0]);
+          sqliUrl1.searchParams.set(param, "'\"");
           const sqliResp1 = await fetchWithTimeout(sqliUrl1.toString(), 8000);
           const sqliBody1 = await sqliResp1.text();
           const hasError1 = sqlErrors.some(e => sqliBody1.toLowerCase().includes(e));
 
           if (hasError1) {
+            // Confirm with second probe
             const sqliUrl2 = new URL(endpoint);
-            sqliUrl2.searchParams.set(param, sqliPayloads[1]);
+            sqliUrl2.searchParams.set(param, "' OR '1'='1");
             const sqliResp2 = await fetchWithTimeout(sqliUrl2.toString(), 8000);
             const sqliBody2 = await sqliResp2.text();
             const hasError2 = sqlErrors.some(e => sqliBody2.toLowerCase().includes(e));
+            const responseChanged = Math.abs(sqliBody2.length - baseLen) > 50;
 
-            if (hasError2) {
+            if (hasError2 || responseChanged) {
               findings.push({
                 id: `A03-SQLI-${Date.now()}-${param}`, severity: 'critical',
                 title: `SQL Injection in "${param}" [DUAL-CONFIRMED]`,
-                description: `Two independent SQLi probes triggered database errors in parameter "${param}".`,
+                description: `SQL error triggered and response changed with injection in parameter "${param}".`,
                 endpoint: sqliUrl1.toString(), method: 'GET', owasp: 'A03:2021',
-                payload: sqliPayloads[0],
-                evidence: `Probe 1: ${sqliBody1.slice(0, 150)}`,
-                evidence2: `Probe 2: ${sqliBody2.slice(0, 150)}`,
+                payload: "'\"",
+                evidence: `Error-based: ${sqliBody1.slice(0, 200)}`,
+                evidence2: `Second probe: response ${hasError2 ? 'error' : 'length change'} (base=${baseLen}, injected=${sqliBody2.length})`,
                 dualConfirmed: true, remediation: 'Use parameterized queries / prepared statements.',
                 cwe: 'CWE-89', cvss: 9.8, mitre: ['T1190'], confidence: 97, category: 'injection',
                 poc: `curl -s "${sqliUrl1.toString()}" | head -20`
               });
+              continue; // found SQLi, skip to next param
             }
           }
+
+          // Test 2: Boolean-based blind SQLi (response length difference)
+          const trueUrl = new URL(endpoint);
+          trueUrl.searchParams.set(param, "1 AND 1=1");
+          const falseUrl = new URL(endpoint);
+          falseUrl.searchParams.set(param, "1 AND 1=2");
+          const [trueResp, falseResp] = await Promise.all([
+            fetchWithTimeout(trueUrl.toString(), 8000).then(r => r.text()).catch(() => ''),
+            fetchWithTimeout(falseUrl.toString(), 8000).then(r => r.text()).catch(() => '')
+          ]);
+
+          if (trueResp && falseResp && trueResp.length > 100) {
+            const trueDiff = Math.abs(trueResp.length - baseLen);
+            const falseDiff = Math.abs(falseResp.length - baseLen);
+            // If true condition matches baseline but false differs significantly
+            if (trueDiff < 50 && falseDiff > 100) {
+              // Triple-confirm with another boolean pair
+              const true2Url = new URL(endpoint);
+              true2Url.searchParams.set(param, "1 OR 1=1");
+              const true2Resp = await fetchWithTimeout(true2Url.toString(), 8000).then(r => r.text()).catch(() => '');
+              if (true2Resp && Math.abs(true2Resp.length - trueResp.length) < 100) {
+                findings.push({
+                  id: `A03-BSQLI-${Date.now()}-${param}`, severity: 'critical',
+                  title: `Blind SQL Injection in "${param}" [BOOLEAN-BASED]`,
+                  description: `Boolean conditions produce different responses: TRUE (${trueResp.length} bytes) vs FALSE (${falseResp.length} bytes) vs baseline (${baseLen} bytes).`,
+                  endpoint: trueUrl.toString(), method: 'GET', owasp: 'A03:2021',
+                  payload: '1 AND 1=1 / 1 AND 1=2',
+                  evidence: `TRUE response: ${trueResp.length}b matches baseline ${baseLen}b`,
+                  evidence2: `FALSE response: ${falseResp.length}b differs significantly`,
+                  dualConfirmed: true, remediation: 'Use parameterized queries / prepared statements.',
+                  cwe: 'CWE-89', cvss: 9.8, mitre: ['T1190'], confidence: 90, category: 'injection',
+                  poc: `# Boolean blind SQLi:\ncurl -s "${trueUrl.toString()}" | wc -c\ncurl -s "${falseUrl.toString()}" | wc -c`
+                });
+                continue;
+              }
+            }
+          }
+        } catch {}
+
+        // === XSS dual-confirm ===
+        const xssPayloads = payloads.a03_xss || [];
+        if (xssPayloads.length >= 2) {
+          try {
+            const xssUrl1 = new URL(endpoint);
+            xssUrl1.searchParams.set(param, xssPayloads[0]);
+            const xssResp1 = await fetchWithTimeout(xssUrl1.toString(), 8000);
+            const xssBody1 = await xssResp1.text();
+            // Check if raw payload is reflected unescaped
+            const reflected1 = xssBody1.includes(xssPayloads[0]) || 
+              (xssBody1.includes('onerror=') && !responseText.includes('onerror=')) ||
+              (xssBody1.includes('onload=') && !responseText.includes('onload='));
+
+            if (reflected1) {
+              const xssUrl2 = new URL(endpoint);
+              xssUrl2.searchParams.set(param, xssPayloads[1]);
+              const xssResp2 = await fetchWithTimeout(xssUrl2.toString(), 8000);
+              const xssBody2 = await xssResp2.text();
+              const reflected2 = xssBody2.includes(xssPayloads[1]) || 
+                (xssBody2.includes('onload=') && !responseText.includes('onload=')) ||
+                (xssBody2.includes('confirm(') && !responseText.includes('confirm('));
+
+              if (reflected2) {
+                findings.push({
+                  id: `A03-XSS-${Date.now()}-${param}`, severity: 'high',
+                  title: `Reflected XSS in "${param}" [DUAL-CONFIRMED]`,
+                  description: `Two independent XSS probes reflected without sanitization in parameter "${param}".`,
+                  endpoint: xssUrl1.toString(), method: 'GET', owasp: 'A03:2021',
+                  payload: xssPayloads[0],
+                  evidence: `Probe 1 reflected: ${xssPayloads[0]}`,
+                  evidence2: `Probe 2 reflected: ${xssPayloads[1]}`,
+                  dualConfirmed: true, remediation: 'Implement output encoding and CSP.',
+                  cwe: 'CWE-79', cvss: 6.1, mitre: ['T1059.007'], confidence: 96, category: 'injection',
+                  poc: `curl -s "${xssUrl1.toString()}" | grep -o 'onerror=.*'`
+                });
+                continue;
+              }
+            }
+
+            // Single reflection check (lower confidence)
+            if (reflected1) {
+              findings.push({
+                id: `A03-XSS-SINGLE-${Date.now()}-${param}`, severity: 'medium',
+                title: `Potential Reflected XSS in "${param}"`,
+                description: `XSS payload reflected in parameter "${param}" — single confirmation, needs manual verify.`,
+                endpoint: xssUrl1.toString(), method: 'GET', owasp: 'A03:2021',
+                payload: xssPayloads[0],
+                evidence: `Payload reflected in response`,
+                remediation: 'Implement output encoding and CSP.',
+                cwe: 'CWE-79', cvss: 6.1, confidence: 70, category: 'injection',
+                poc: `curl -s "${xssUrl1.toString()}" | grep -c "${xssPayloads[0].slice(0, 20)}"`
+              });
+            }
+          } catch {}
         }
 
         // Command injection check
         const cmdiPayloads = payloads.a03_cmdi || [];
-        for (const payload of cmdiPayloads.slice(0, 2)) {
+        for (const payload of cmdiPayloads.slice(0, 3)) {
           try {
             const cmdiUrl = new URL(endpoint);
             cmdiUrl.searchParams.set(param, payload);
             const cmdiResp = await fetchWithTimeout(cmdiUrl.toString(), 8000);
             const cmdiBody = await cmdiResp.text();
-            if (cmdiBody.includes('uid=') || cmdiBody.includes('root:') || cmdiBody.includes('Directory of')) {
+            if (cmdiBody.includes('uid=') || cmdiBody.includes('root:') || cmdiBody.includes('Directory of') || cmdiBody.includes('www-data')) {
               findings.push({
                 id: `A03-CMDI-${Date.now()}-${param}`, severity: 'critical',
                 title: `OS Command Injection in "${param}"`,
@@ -1109,6 +1198,34 @@ async function assessEndpointOWASP(
             }
           } catch {}
         }
+
+        // SSTI (Server-Side Template Injection)
+        try {
+          const sstiUrl = new URL(endpoint);
+          sstiUrl.searchParams.set(param, '{{7*7}}');
+          const sstiResp = await fetchWithTimeout(sstiUrl.toString(), 8000);
+          const sstiBody = await sstiResp.text();
+          if (sstiBody.includes('49') && !responseText.includes('49')) {
+            // Confirm with second payload
+            const sstiUrl2 = new URL(endpoint);
+            sstiUrl2.searchParams.set(param, '${7*7}');
+            const sstiResp2 = await fetchWithTimeout(sstiUrl2.toString(), 8000);
+            const sstiBody2 = await sstiResp2.text();
+            findings.push({
+              id: `A03-SSTI-${Date.now()}-${param}`, severity: 'critical',
+              title: `Server-Side Template Injection in "${param}"`,
+              description: `Template expression {{7*7}} evaluated to 49 in parameter "${param}".`,
+              endpoint: sstiUrl.toString(), method: 'GET', owasp: 'A03:2021',
+              payload: '{{7*7}}',
+              evidence: 'Expression evaluated: 49 found in response',
+              evidence2: sstiBody2.includes('49') ? 'Second template syntax also evaluated' : 'Single confirmation',
+              dualConfirmed: sstiBody2.includes('49'),
+              remediation: 'Never pass user input directly to template engines.',
+              cwe: 'CWE-94', cvss: 9.8, mitre: ['T1059'], confidence: sstiBody2.includes('49') ? 95 : 75, category: 'injection',
+              poc: `curl -s "${sstiUrl.toString()}" | grep 49`
+            });
+          }
+        } catch {}
       }
     } catch {}
 
