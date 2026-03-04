@@ -72,11 +72,12 @@ export const FindingsTable = () => {
   };
 
   // Group findings by hash for display
-  const grouped = findings.reduce((acc: Record<string, any[]>, f) => {
+  const grouped: Record<string, any[]> = {};
+  for (const f of findings) {
     const key = `${f.target_host}|${f.finding_type}`;
-    (acc[key] = acc[key] || []).push(f);
-    return acc;
-  }, {});
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(f);
+  }
 
   return (
     <Card className="p-5 bg-card/50 backdrop-blur-sm">
