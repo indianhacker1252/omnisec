@@ -74,3 +74,6 @@ verify_jwt = false
 
 [functions.payload-mutation]
 verify_jwt = false
+
+[functions.recon-orchestrator]
+verify_jwt = false
