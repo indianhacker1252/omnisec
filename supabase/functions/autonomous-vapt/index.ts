@@ -305,7 +305,7 @@ serve(async (req) => {
       await emitProgress('owasp_scan', 5, 27, `Running OWASP Top 10 assessment on ${discoveredEndpoints.length} endpoints...`);
       await emitAIThought(`Starting comprehensive OWASP Top 10 testing: A01-Broken Access Control, A02-Crypto Failures, A03-Injection, A04-Insecure Design, A05-Misconfiguration, A06-Vulnerable Components, A07-Auth Failures, A08-Data Integrity, A09-Logging Failures, A10-SSRF. Each finding requires dual-confirmation.`, 'owasp_scan', 5);
 
-      const endpointsToTest = discoveredEndpoints.slice(0, 60);
+      const endpointsToTest = discoveredEndpoints.slice(0, 120);
       for (let i = 0; i < endpointsToTest.length; i++) {
         const endpoint = endpointsToTest[i];
         if (i % 5 === 0) {
