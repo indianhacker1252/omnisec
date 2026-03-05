@@ -1699,6 +1699,12 @@ async function performDeepInjectionWithMutation(
       const { finding } = await fireWithRetry(target.toString(), param, payload, 'GET', param);
       if (finding) { findings.push(finding); break; }
     }
+    // Also test deserialization/integrity payloads on params
+    for (const payload of (payloads.a08_integrity || [])) {
+      if (failedPayloads.includes(payload)) continue;
+      const { finding } = await fireWithRetry(target.toString(), param, payload, 'GET', param);
+      if (finding) { findings.push(finding); break; }
+    }
   }
 
   return findings;
