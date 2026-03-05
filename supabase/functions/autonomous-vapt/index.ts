@@ -1189,7 +1189,7 @@ async function assessEndpointOWASP(
 
         // NoSQLi check
         const nosqliPayloads = payloads.a03_nosqli || [];
-        for (const payload of nosqliPayloads.slice(0, 2)) {
+        for (const payload of nosqliPayloads) { // ALL nosqli payloads
           try {
             const nosqlUrl = new URL(endpoint);
             nosqlUrl.searchParams.set(param, payload);
