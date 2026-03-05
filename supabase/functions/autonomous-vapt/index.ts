@@ -325,7 +325,7 @@ serve(async (req) => {
       await emitProgress('cors_scan', 6, 44, 'Testing CORS misconfigurations...');
       await emitAIThought(`Testing CORS policies across all targets. I'll inject malicious Origin headers via both OPTIONS preflight and GET requests. Only flagging if both agree — this eliminates false positives from CDN/proxy rewrites.`, 'cors_scan', 6);
       
-      const corsTargets = [targetUrl.toString(), ...subdomains.slice(0, 10).map(s => `https://${s}/`)];
+      const corsTargets = [targetUrl.toString(), ...subdomains.map(s => `https://${s}/`)]; // ALL subdomains
       for (const t of corsTargets) {
         const corsFindings = await scanCORS(t);
         allFindings.push(...corsFindings);
