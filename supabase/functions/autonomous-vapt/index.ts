@@ -830,7 +830,7 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
   }); // No limit — crawl ALL discovered links
 
   for (let i = 0; i < linksToCrawl.length; i += 10) {
-    const batch = linksToCrawl.slice(i, i + 8);
+    const batch = linksToCrawl.slice(i, i + 10);
     await Promise.all(batch.map(async (link: string) => {
       if (crawledUrls.has(link)) return;
       crawledUrls.add(link);
