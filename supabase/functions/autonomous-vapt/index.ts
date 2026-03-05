@@ -827,9 +827,9 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
   const crawledUrls = new Set<string>();
   const linksToCrawl = results.endpoints.filter((ep: string) => {
     try { return new URL(ep).hostname === target.hostname; } catch { return false; }
-  }).slice(0, 30);
+  }); // No limit — crawl ALL discovered links
 
-  for (let i = 0; i < linksToCrawl.length; i += 8) {
+  for (let i = 0; i < linksToCrawl.length; i += 10) {
     const batch = linksToCrawl.slice(i, i + 8);
     await Promise.all(batch.map(async (link: string) => {
       if (crawledUrls.has(link)) return;
