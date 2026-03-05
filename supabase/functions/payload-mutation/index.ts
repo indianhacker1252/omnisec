@@ -471,72 +471,151 @@ function analyzeResponse(
   chain: MutationChain
 ): any | null {
   const lowerBody = responseText.toLowerCase();
+  const mutationNote = chain.attemptCount > 1
+    ? `[WAF Bypassed after ${chain.attemptCount} mutations]`
+    : '';
+  const baseMeta = {
+    endpoint: targetUrl, method: 'GET', payload, owasp: 'A03:2021',
+    dualConfirmed: chain.attemptCount > 1,
+    retryCount: chain.attemptCount,
+    mutationChain: chain.attempts.map(a => ({ payload: a.payload, status: a.status, blocked: a.blocked })),
+  };
 
-  // XSS detection
-  if (responseText.includes(payload) || (payload.includes('alert') && responseText.includes('onerror='))) {
-    return {
-      id: `MUT-XSS-${Date.now()}`,
-      severity: 'high',
-      title: `Reflected XSS in "${parameter}" [WAF Bypassed${chain.attemptCount > 1 ? ` after ${chain.attemptCount} mutations` : ''}]`,
-      description: `Payload reflected after ${chain.attemptCount} attempt(s). Original was blocked, mutated payload bypassed WAF.`,
-      endpoint: targetUrl, method: 'GET', payload, owasp: 'A03:2021',
-      evidence: `Reflected payload: ${payload}`,
-      evidence2: chain.attemptCount > 1 ? `Original "${chain.originalPayload}" blocked → mutated to "${payload}"` : 'First attempt succeeded',
-      dualConfirmed: chain.attemptCount > 1,
-      remediation: 'Implement output encoding and strict CSP. WAF alone is insufficient.',
-      cwe: 'CWE-79', cvss: 6.1, confidence: chain.attemptCount > 1 ? 95 : 85,
-      category: 'injection', retryCount: chain.attemptCount,
-      mutationChain: chain.attempts.map(a => ({ payload: a.payload, status: a.status, blocked: a.blocked })),
-    };
+  // XSS detection — expanded
+  const xssIndicators = [
+    payload, 'onerror=', 'onload=', 'onmouseover=', 'onfocus=', 'ontoggle=',
+    'onstart=', 'alert(', 'confirm(', 'prompt(', 'javascript:', '<script', '<svg', '<img src=x',
+  ];
+  if (xssIndicators.some(ind => responseText.includes(ind) && !ind.startsWith('<') || 
+      (ind.startsWith('<') && responseText.includes(ind) && !responseText.includes('&lt;' + ind.slice(1))))) {
+    // Verify it's actually reflected (not just in existing page content)
+    const payloadReflected = responseText.includes(payload) || 
+      xssIndicators.filter(i => i !== payload).some(i => responseText.includes(i) && responseText.indexOf(i) !== lowerBody.indexOf(i));
+    if (payloadReflected) {
+      return {
+        id: `MUT-XSS-${Date.now()}`, severity: 'high',
+        title: `Reflected XSS in "${parameter}" ${mutationNote}`,
+        description: `Payload reflected after ${chain.attemptCount} attempt(s). ${chain.attemptCount > 1 ? 'Original was blocked, mutated payload bypassed WAF.' : 'First attempt succeeded.'}`,
+        ...baseMeta,
+        evidence: `Reflected payload: ${payload}`,
+        evidence2: chain.attemptCount > 1 ? `Original "${chain.originalPayload}" blocked → mutated to "${payload}"` : 'First attempt succeeded',
+        remediation: 'Implement output encoding and strict CSP. WAF alone is insufficient.',
+        cwe: 'CWE-79', cvss: 6.1, confidence: chain.attemptCount > 1 ? 95 : 85, category: 'injection',
+      };
+    }
   }
 
-  // SQLi detection
+  // SQLi detection — expanded error patterns
   const sqlErrors = ['sql syntax', 'mysql_fetch', 'pg_query', 'sqlite', 'ora-', 'sql error',
-    'syntax error', 'unclosed quotation', 'warning: mysql', 'you have an error'];
+    'syntax error', 'unclosed quotation', 'warning: mysql', 'you have an error',
+    'odbc', 'microsoft sql', 'postgresql', 'sqlstate', 'supplied argument is not',
+    'db2_', 'sybase', 'ingres', 'interbase', 'jdbc', 'quoted string not properly terminated',
+    'unterminated string', 'invalid query', 'query failed', 'expects parameter',
+    'unexpected end of sql', 'valid mysql result', 'org.hibernate', 'com.mysql',
+    'java.sql.sqlexception', 'pdo::__construct', 'unknown column'];
   if (sqlErrors.some(e => lowerBody.includes(e))) {
     return {
-      id: `MUT-SQLI-${Date.now()}`,
-      severity: 'critical',
-      title: `SQL Injection in "${parameter}" [WAF Bypassed${chain.attemptCount > 1 ? ` after ${chain.attemptCount} mutations` : ''}]`,
+      id: `MUT-SQLI-${Date.now()}`, severity: 'critical',
+      title: `SQL Injection in "${parameter}" ${mutationNote}`,
       description: `SQL error triggered after ${chain.attemptCount} attempt(s). Mutated payload evaded filters.`,
-      endpoint: targetUrl, method: 'GET', payload, owasp: 'A03:2021',
-      evidence: `SQL error in response: ${responseText.slice(0, 200)}`,
+      ...baseMeta,
+      evidence: `SQL error in response: ${responseText.slice(0, 300)}`,
       evidence2: chain.attemptCount > 1 ? `Original "${chain.originalPayload}" blocked → mutated` : 'First attempt',
       dualConfirmed: true,
       remediation: 'Use parameterized queries. WAF bypass proves defense-in-depth needed.',
-      cwe: 'CWE-89', cvss: 9.8, confidence: 97,
-      category: 'injection', retryCount: chain.attemptCount,
-      mutationChain: chain.attempts.map(a => ({ payload: a.payload, status: a.status, blocked: a.blocked })),
+      cwe: 'CWE-89', cvss: 9.8, confidence: 97, category: 'injection',
     };
   }
 
-  // Command injection detection
-  if (lowerBody.includes('uid=') || lowerBody.includes('root:') || lowerBody.includes('directory of')) {
+  // Command injection detection — expanded
+  if (lowerBody.includes('uid=') || lowerBody.includes('root:') || lowerBody.includes('directory of') ||
+      lowerBody.includes('www-data') || lowerBody.includes('/bin/bash') || lowerBody.includes('/bin/sh') ||
+      lowerBody.includes('volume serial number') || lowerBody.includes('windows\\system32')) {
     return {
-      id: `MUT-CMDI-${Date.now()}`,
-      severity: 'critical',
-      title: `Command Injection in "${parameter}" [WAF Bypassed]`,
+      id: `MUT-CMDI-${Date.now()}`, severity: 'critical',
+      title: `Command Injection in "${parameter}" ${mutationNote}`,
       description: `OS command output returned. Mutated payload evaded WAF.`,
-      endpoint: targetUrl, method: 'GET', payload, owasp: 'A03:2021',
-      evidence: `Command output: ${responseText.slice(0, 200)}`,
+      ...baseMeta,
+      evidence: `Command output: ${responseText.slice(0, 300)}`,
       remediation: 'Never pass user input to OS commands.',
-      cwe: 'CWE-78', cvss: 9.8, confidence: 96,
-      category: 'injection', retryCount: chain.attemptCount,
+      cwe: 'CWE-78', cvss: 9.8, confidence: 96, category: 'injection',
     };
   }
 
-  // Path traversal detection
-  if (lowerBody.includes('root:x:0:0') || lowerBody.includes('/bin/bash') || lowerBody.includes('[extensions]')) {
+  // Path traversal detection — expanded
+  if (lowerBody.includes('root:x:0:0') || lowerBody.includes('/bin/bash') || lowerBody.includes('[extensions]') ||
+      lowerBody.includes('[boot loader]') || lowerBody.includes('for 16-bit app support') ||
+      lowerBody.includes('/sbin/nologin') || lowerBody.includes('daemon:x:')) {
     return {
-      id: `MUT-TRAV-${Date.now()}`,
-      severity: 'critical',
-      title: `Path Traversal in "${parameter}" [WAF Bypassed]`,
+      id: `MUT-TRAV-${Date.now()}`, severity: 'critical',
+      title: `Path Traversal in "${parameter}" ${mutationNote}`,
       description: `Server file content leaked. Mutated encoding bypassed filter.`,
-      endpoint: targetUrl, method: 'GET', payload, owasp: 'A01:2021',
-      evidence: `File content: ${responseText.slice(0, 200)}`,
+      ...baseMeta, owasp: 'A01:2021',
+      evidence: `File content: ${responseText.slice(0, 300)}`,
       remediation: 'Validate file paths against allowlist.',
-      cwe: 'CWE-22', cvss: 9.3, confidence: 97,
-      category: 'traversal', retryCount: chain.attemptCount,
+      cwe: 'CWE-22', cvss: 9.3, confidence: 97, category: 'traversal',
+    };
+  }
+
+  // SSTI detection
+  if (payload.includes('{{7*7}}') && responseText.includes('49') ||
+      payload.includes('${7*7}') && responseText.includes('49') ||
+      payload.includes('#{7*7}') && responseText.includes('49')) {
+    return {
+      id: `MUT-SSTI-${Date.now()}`, severity: 'critical',
+      title: `Server-Side Template Injection in "${parameter}" ${mutationNote}`,
+      description: `Template expression evaluated. Code execution possible.`,
+      ...baseMeta,
+      evidence: `Expression evaluated to 49`,
+      remediation: 'Never pass user input to template engines.',
+      cwe: 'CWE-94', cvss: 9.8, confidence: 93, category: 'injection',
+    };
+  }
+
+  // SSRF detection
+  if (lowerBody.includes('ami-id') || lowerBody.includes('instance-id') ||
+      lowerBody.includes('meta-data') || lowerBody.includes('169.254.169.254') ||
+      lowerBody.includes('internal server') || lowerBody.includes('localhost')) {
+    if (payload.includes('169.254') || payload.includes('127.0.0.1') || payload.includes('[::1]')) {
+      return {
+        id: `MUT-SSRF-${Date.now()}`, severity: 'critical',
+        title: `SSRF in "${parameter}" ${mutationNote}`,
+        description: `Internal resource accessible via parameter.`,
+        ...baseMeta, owasp: 'A10:2021',
+        evidence: `Internal content: ${responseText.slice(0, 300)}`,
+        remediation: 'Validate and whitelist URLs.',
+        cwe: 'CWE-918', cvss: 9.0, confidence: 92, category: 'ssrf',
+      };
+    }
+  }
+
+  // CRLF / Header injection
+  if (payload.includes('%0d%0a') || payload.includes('\\r\\n')) {
+    // Can't check headers from text response, but check if response contains injected content
+    if (lowerBody.includes('injected') || lowerBody.includes('pwned')) {
+      return {
+        id: `MUT-CRLF-${Date.now()}`, severity: 'high',
+        title: `CRLF Injection in "${parameter}" ${mutationNote}`,
+        description: `Header injection via CRLF characters.`,
+        ...baseMeta, owasp: 'A08:2021',
+        evidence: `Injected content found in response`,
+        remediation: 'Strip CR/LF from user input.',
+        cwe: 'CWE-113', cvss: 7.5, confidence: 85, category: 'integrity',
+      };
+    }
+  }
+
+  // Open redirect detection  
+  if ((payload.includes('evil.com') || payload.includes('attacker.com')) && 
+      (status === 301 || status === 302 || status === 303 || status === 307)) {
+    return {
+      id: `MUT-REDIRECT-${Date.now()}`, severity: 'medium',
+      title: `Open Redirect in "${parameter}" ${mutationNote}`,
+      description: `Server redirects to attacker-controlled URL.`,
+      ...baseMeta, owasp: 'A01:2021',
+      evidence: `HTTP ${status} redirect`,
+      remediation: 'Validate redirect targets against allowlist.',
+      cwe: 'CWE-601', cvss: 6.1, confidence: 80, category: 'access_control',
     };
   }
 
