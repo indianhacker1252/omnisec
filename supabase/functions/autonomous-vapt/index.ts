@@ -305,11 +305,11 @@ serve(async (req) => {
       await emitProgress('owasp_scan', 5, 27, `Running OWASP Top 10 assessment on ${discoveredEndpoints.length} endpoints...`);
       await emitAIThought(`Starting comprehensive OWASP Top 10 testing: A01-Broken Access Control, A02-Crypto Failures, A03-Injection, A04-Insecure Design, A05-Misconfiguration, A06-Vulnerable Components, A07-Auth Failures, A08-Data Integrity, A09-Logging Failures, A10-SSRF. Each finding requires dual-confirmation.`, 'owasp_scan', 5);
 
-      const endpointsToTest = discoveredEndpoints.slice(0, 120);
+      const endpointsToTest = discoveredEndpoints; // No limit — test ALL discovered endpoints
       for (let i = 0; i < endpointsToTest.length; i++) {
         const endpoint = endpointsToTest[i];
-        if (i % 5 === 0) {
-          await emitProgress('owasp_scan', 5, 27 + Math.round((i / endpointsToTest.length) * 15),
+        if (i % 3 === 0) {
+          await emitProgress('owasp_scan', 5, 27 + Math.round((i / endpointsToTest.length) * 20),
             `Testing endpoint ${i + 1}/${endpointsToTest.length}`, { currentEndpoint: endpoint });
         }
         const endpointFindings = await assessEndpointOWASP(endpoint, fingerprint, aiPayloads, previousPayloads);
