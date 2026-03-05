@@ -736,7 +736,7 @@ async function enumerateSubdomains(hostname: string): Promise<string[]> {
     }));
   }
 
-  return Array.from(found).slice(0, 50);
+  return Array.from(found); // No limit — enumerate ALL subdomains
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
