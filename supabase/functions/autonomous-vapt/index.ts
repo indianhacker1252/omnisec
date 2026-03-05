@@ -171,12 +171,12 @@ serve(async (req) => {
       return { severityCounts, findings };
     };
 
-    // Safety timeout at 150s
+    // Safety timeout at 280s (edge function limit is 300s)
     const timeoutId = setTimeout(async () => {
       console.log('[TIMEOUT SAFETY] Saving partial results...');
       await saveResultsToDB('completed');
       await emitProgress('complete', 14, 100, `Scan saved (partial). ${allFindings.length} findings.`);
-    }, 150000);
+    }, 280000);
 
     try {
       // ═══════════════════════════════════════════════════════════════════
