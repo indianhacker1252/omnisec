@@ -317,7 +317,7 @@ serve(async (req) => {
       }
       
       await emitAIThought(`OWASP assessment done. ${allFindings.filter(f => !f.falsePositive).length} findings so far. ${allFindings.filter(f => f.dualConfirmed).length} are dual-confirmed. Moving to specialized scans.`, 'owasp_scan', 5);
-      await emitProgress('owasp_scan', 5, 42, `OWASP scan: ${allFindings.filter(f => !f.falsePositive).length} findings`);
+      await emitProgress('owasp_scan', 5, 47, `OWASP scan: ${allFindings.filter(f => !f.falsePositive).length} findings`);
 
       // ═══════════════════════════════════════════════════════════════════
       // PHASE 6: CORS SCAN
