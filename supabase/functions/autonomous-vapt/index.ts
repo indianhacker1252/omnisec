@@ -1165,7 +1165,7 @@ async function assessEndpointOWASP(
 
         // Command injection check
         const cmdiPayloads = payloads.a03_cmdi || [];
-        for (const payload of cmdiPayloads.slice(0, 3)) {
+        for (const payload of cmdiPayloads) { // ALL cmdi payloads
           try {
             const cmdiUrl = new URL(endpoint);
             cmdiUrl.searchParams.set(param, payload);
