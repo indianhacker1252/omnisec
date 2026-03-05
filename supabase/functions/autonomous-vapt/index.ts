@@ -338,7 +338,7 @@ serve(async (req) => {
       await emitProgress('traversal_scan', 7, 50, 'Testing directory traversal...');
       await emitAIThought(`Testing path traversal with multiple encodings: raw ../, URL-encoded %2e%2e, double-encoded %252e, null byte injection. Checking both Linux (/etc/passwd) and Windows (win.ini) indicators.`, 'traversal_scan', 7);
       
-      for (const t of [targetUrl.toString(), ...subdomains.slice(0, 5).map(s => `https://${s}/`)]) {
+      for (const t of [targetUrl.toString(), ...subdomains.map(s => `https://${s}/`)]) { // ALL subdomains
         const travFindings = await scanDirectoryTraversal(t, discoveryResults.params || []);
         allFindings.push(...travFindings);
       }
