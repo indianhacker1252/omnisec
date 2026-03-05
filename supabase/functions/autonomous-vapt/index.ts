@@ -770,7 +770,7 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
 
       // Extract forms
       const formMatches = html.match(/<form[^>]*>[\s\S]*?<\/form>/gi) || [];
-      results.forms = formMatches.slice(0, 20).map((form: string, i: number) => {
+      results.forms = formMatches.slice(0, 50).map((form: string, i: number) => {
         const action = form.match(/action=["']([^"']+)["']/i)?.[1] || '';
         const method = form.match(/method=["']([^"']+)["']/i)?.[1] || 'GET';
         const inputs = (form.match(/<input[^>]+>/gi) || []).map((inp: string) => {
