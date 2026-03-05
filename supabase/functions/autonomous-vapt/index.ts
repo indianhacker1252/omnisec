@@ -414,10 +414,10 @@ serve(async (req) => {
 
       // Build endpoint tree
       const epNode: TargetNode = { name: 'Endpoints', type: 'endpoint', children: [] };
-      for (const ep of discoveredEndpoints.slice(0, 30)) {
+      for (const ep of discoveredEndpoints.slice(0, 100)) {
         const vulns = verifiedFindings.filter(f => f.endpoint === ep);
         const epChild: TargetNode = { name: ep.replace(targetUrl.origin, ''), type: 'endpoint', children: [], meta: { vulnCount: vulns.length } };
-        for (const v of vulns.slice(0, 5)) {
+        for (const v of vulns.slice(0, 10)) {
           epChild.children.push({ name: `[${v.severity.toUpperCase()}] ${v.title}`, type: 'vulnerability', children: [], meta: { cwe: v.cwe, confidence: v.confidence } });
         }
         epNode.children.push(epChild);
