@@ -1663,17 +1663,29 @@ async function performDeepInjectionWithMutation(
   };
 
   // ── Test forms ──────────────────────────────────────────────────────
-  for (const form of (forms || []).slice(0, 10)) {
+  for (const form of (forms || [])) { // ALL forms
     const formUrl = form.action ? new URL(form.action, target).toString() : target.toString();
     for (const input of form.inputs) {
-      // XSS with mutation retry
-      for (const payload of (payloads.a03_xss || []).slice(0, 3)) {
+      // XSS with mutation retry — test ALL payloads
+      for (const payload of (payloads.a03_xss || [])) {
         if (failedPayloads.includes(payload)) continue;
         const { finding } = await fireWithRetry(formUrl, input.name, payload, form.method || 'GET', input.name);
         if (finding) { findings.push(finding); break; }
       }
-      // SQLi with mutation retry
-      for (const payload of (payloads.a03_sqli || []).slice(0, 3)) {
+      // SQLi with mutation retry — test ALL payloads
+      for (const payload of (payloads.a03_sqli || [])) {
+        if (failedPayloads.includes(payload)) continue;
+        const { finding } = await fireWithRetry(formUrl, input.name, payload, form.method || 'GET', input.name);
+        if (finding) { findings.push(finding); break; }
+      }
+      // Command injection with mutation retry
+      for (const payload of (payloads.a03_cmdi || [])) {
+        if (failedPayloads.includes(payload)) continue;
+        const { finding } = await fireWithRetry(formUrl, input.name, payload, form.method || 'GET', input.name);
+        if (finding) { findings.push(finding); break; }
+      }
+      // SSRF via form inputs
+      for (const payload of (payloads.a10_ssrf || [])) {
         if (failedPayloads.includes(payload)) continue;
         const { finding } = await fireWithRetry(formUrl, input.name, payload, form.method || 'GET', input.name);
         if (finding) { findings.push(finding); break; }
@@ -1681,9 +1693,9 @@ async function performDeepInjectionWithMutation(
     }
   }
 
-  // ── Test URL params with SSRF ────────────────────────────────────────
-  for (const param of (params || []).slice(0, 8)) {
-    for (const payload of (payloads.a10_ssrf || []).slice(0, 2)) {
+  // ── Test URL params with ALL injection types ─────────────────────────
+  for (const param of (params || [])) { // ALL params
+    for (const payload of (payloads.a10_ssrf || [])) { // ALL SSRF payloads
       const { finding } = await fireWithRetry(target.toString(), param, payload, 'GET', param);
       if (finding) { findings.push(finding); break; }
     }
