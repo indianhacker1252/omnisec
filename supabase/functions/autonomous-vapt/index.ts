@@ -1065,15 +1065,18 @@ async function assessEndpointOWASP(
       const fuzzParams = commonInjectableParams.filter(p => !existingParams.includes(p));
 
       // Combine: existing params first, then fuzz params
-      const allParams = [...paramsToTest, ...fuzzParams.slice(0, 15)];
+      const allParams = [...paramsToTest, ...fuzzParams]; // ALL params — no limit
 
       const sqlErrors = ['sql syntax', 'mysql_fetch', 'pg_query', 'sqlite', 'ora-', 'sql error', 'odbc',
         'syntax error', 'unclosed quotation', 'warning: mysql', 'you have an error in your sql',
         'microsoft sql', 'mysql_num_rows', 'supplied argument is not', 'pg_exec', 'mysql_result',
         'Unclosed quotation mark', 'mssql_query', 'ORA-01756', 'SQLSTATE', 'PDOException',
-        'mysql_connect', 'Access denied for user', 'Error en la consulta'];
+        'mysql_connect', 'Access denied for user', 'Error en la consulta',
+        'java.sql.sqlexception', 'org.hibernate', 'com.mysql', 'unknown column',
+        'quoted string not properly terminated', 'unterminated string',
+        'query failed', 'expects parameter', 'valid mysql result', 'pdo::__construct'];
 
-      for (const param of allParams.slice(0, 20)) {
+      for (const param of allParams) { // ALL params — no limit
         // === BLIND SQLi: Baseline comparison ===
         try {
           // Get baseline response with normal value
