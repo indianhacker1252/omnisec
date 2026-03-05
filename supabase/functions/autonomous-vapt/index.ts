@@ -1397,8 +1397,8 @@ async function scanDirectoryTraversal(targetUrl: string, extractedParams: string
   ];
   const fileParams = [...new Set([...extractedParams, 'file', 'path', 'page', 'include', 'load', 'template', 'doc', 'read', 'view'])];
 
-  for (const param of fileParams.slice(0, 8)) {
-    for (const payload of traversalPayloads.slice(0, 3)) {
+  for (const param of fileParams) { // Test ALL file params
+    for (const payload of traversalPayloads) { // Test ALL traversal payloads
       try {
         const testUrl = new URL(targetUrl);
         testUrl.searchParams.set(param, payload);
