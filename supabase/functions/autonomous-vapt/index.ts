@@ -915,17 +915,28 @@ async function discoverEndpoints(target: URL, shodanKey: string | undefined, max
 
   // Common path discovery
   const commonPaths = [
-    '/api', '/api/v1', '/api/v2', '/graphql', '/rest',
-    '/admin', '/login', '/signin', '/auth', '/oauth', '/register',
-    '/dashboard', '/panel', '/swagger', '/api-docs', '/openapi.json',
-    '/robots.txt', '/sitemap.xml', '/wp-admin', '/wp-json',
-    '/phpinfo.php', '/server-status', '/.git/config', '/.env',
-    '/health', '/healthz', '/metrics', '/debug', '/test',
-    '/backup', '/upload', '/uploads', '/files', '/static',
+    '/api', '/api/v1', '/api/v2', '/api/v3', '/graphql', '/rest',
+    '/admin', '/login', '/signin', '/auth', '/oauth', '/register', '/signup',
+    '/dashboard', '/panel', '/swagger', '/api-docs', '/openapi.json', '/swagger.json',
+    '/robots.txt', '/sitemap.xml', '/wp-admin', '/wp-json', '/wp-login.php',
+    '/phpinfo.php', '/server-status', '/server-info', '/.git/config', '/.git/HEAD', '/.env',
+    '/health', '/healthz', '/metrics', '/debug', '/test', '/info', '/status',
+    '/backup', '/upload', '/uploads', '/files', '/static', '/tmp', '/temp',
     '/.svn/entries', '/.DS_Store', '/web.config', '/crossdomain.xml',
-    '/wp-config.php.bak', '/.htpasswd', '/config.yml',
-    '/search', '/product', '/item', '/category', '/user', '/comment',
-    '/cgi-bin/', '/images/', '/includes/', '/js/',
+    '/wp-config.php.bak', '/.htpasswd', '/config.yml', '/config.json', '/config.xml',
+    '/search', '/product', '/item', '/category', '/user', '/comment', '/account',
+    '/cgi-bin/', '/images/', '/includes/', '/js/', '/css/', '/fonts/',
+    '/console', '/actuator', '/actuator/env', '/actuator/health', '/actuator/info',
+    '/elmah.axd', '/trace.axd', '/wp-content/debug.log', '/error_log', '/error.log',
+    '/.well-known/security.txt', '/security.txt', '/humans.txt',
+    '/api/users', '/api/user', '/api/config', '/api/settings', '/api/admin',
+    '/xmlrpc.php', '/readme.html', '/license.txt', '/changelog.txt',
+    '/phpmyadmin', '/pma', '/adminer', '/adminer.php',
+    '/solr/', '/jenkins/', '/_cat/indices', '/_cluster/health',
+    '/manager/html', '/jmx-console', '/web-console',
+    '/feed', '/rss', '/atom', '/api/graphql',
+    '/reset', '/forgot', '/password', '/recover',
+    '/download', '/export', '/import', '/migrate',
   ];
 
   for (let i = 0; i < commonPaths.length; i += 10) {
