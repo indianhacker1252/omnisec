@@ -350,7 +350,7 @@ serve(async (req) => {
       await emitProgress('cookie_scan', 8, 56, 'Auditing cookie and session security...');
       await emitAIThought(`Checking all Set-Cookie headers for missing HttpOnly, Secure, SameSite flags. Cross-referencing with inline scripts to confirm actual cookie theft risk (not just theoretical).`, 'cookie_scan', 8);
       
-      for (const t of [targetUrl.toString(), ...subdomains.slice(0, 5).map(s => `https://${s}/`)]) {
+      for (const t of [targetUrl.toString(), ...subdomains.map(s => `https://${s}/`)]) { // ALL subdomains
         const cookieFindings = await scanCookieSecurity(t);
         allFindings.push(...cookieFindings);
       }
