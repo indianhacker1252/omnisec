@@ -399,6 +399,18 @@ export const UnifiedVAPTDashboard = () => {
           onConfirm={confirmVulnerability} onFalsePositive={markFalsePositive} />
       )}
 
+      {verifyFinding && (
+        <FindingVerificationPanel
+          finding={verifyFinding}
+          onClose={() => setVerifyFinding(null)}
+          onStatusChange={(findingId, status) => {
+            if (status === "confirmed") confirmVulnerability(verifyFinding);
+            if (status === "false_positive") markFalsePositive(verifyFinding);
+            setVerifyFinding(null);
+          }}
+        />
+      )}
+
       {/* Header */}
       <Card className="p-6 border-primary/20 bg-gradient-to-br from-card to-card/80">
         <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
