@@ -376,7 +376,11 @@ export const UnifiedVAPTDashboard = () => {
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
         <Globe className="h-3 w-3 shrink-0" />
         <span className="truncate font-mono">{finding.endpoint}</span>
-        {finding.cwe && <Badge variant="outline" className="ml-auto shrink-0 text-[10px]">{finding.cwe}</Badge>}
+        {finding.cwe && <Badge variant="outline" className="shrink-0 text-[10px]">{finding.cwe}</Badge>}
+        <Button size="sm" variant="outline" className="ml-auto h-6 text-[10px] gap-1 px-2"
+          onClick={(e) => { e.stopPropagation(); setVerifyFinding(finding); }}>
+          <Shield className="h-3 w-3" /> Verify
+        </Button>
       </div>
     </Card>
   );
