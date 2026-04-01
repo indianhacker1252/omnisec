@@ -23,6 +23,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { SubdomainAttackMap } from "@/components/SubdomainAttackMap";
 import { FindingDetailModal } from "@/components/FindingDetailModal";
+import { FindingVerificationPanel } from "@/components/FindingVerificationPanel";
 import { TargetTreeVisualization } from "@/components/TargetTreeVisualization";
 import { MutationMatrix } from "@/components/MutationMatrix";
 import {
@@ -124,6 +125,7 @@ export const UnifiedVAPTDashboard = () => {
   const [subdomainFilter, setSubdomainFilter] = useState<string | null>(null);
   const [activeResultTab, setActiveResultTab] = useState("findings");
   const [connectionStatus, setConnectionStatus] = useState<"pending" | "ok" | "failed">("pending");
+  const [verifyFinding, setVerifyFinding] = useState<Finding | null>(null);
 
   // AI Chatbox state
   const [aiThoughts, setAiThoughts] = useState<LiveLogEntry[]>([]);
@@ -374,7 +376,11 @@ export const UnifiedVAPTDashboard = () => {
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
         <Globe className="h-3 w-3 shrink-0" />
         <span className="truncate font-mono">{finding.endpoint}</span>
-        {finding.cwe && <Badge variant="outline" className="ml-auto shrink-0 text-[10px]">{finding.cwe}</Badge>}
+        {finding.cwe && <Badge variant="outline" className="shrink-0 text-[10px]">{finding.cwe}</Badge>}
+        <Button size="sm" variant="outline" className="ml-auto h-6 text-[10px] gap-1 px-2"
+          onClick={(e) => { e.stopPropagation(); setVerifyFinding(finding); }}>
+          <Shield className="h-3 w-3" /> Verify
+        </Button>
       </div>
     </Card>
   );
@@ -391,6 +397,18 @@ export const UnifiedVAPTDashboard = () => {
       {selectedFinding && (
         <FindingDetailModal finding={selectedFinding} onClose={() => setSelectedFinding(null)}
           onConfirm={confirmVulnerability} onFalsePositive={markFalsePositive} />
+      )}
+
+      {verifyFinding && (
+        <FindingVerificationPanel
+          finding={verifyFinding}
+          onClose={() => setVerifyFinding(null)}
+          onStatusChange={(findingId, status) => {
+            if (status === "confirmed") confirmVulnerability(verifyFinding);
+            if (status === "false_positive") markFalsePositive(verifyFinding);
+            setVerifyFinding(null);
+          }}
+        />
       )}
 
       {/* Header */}
