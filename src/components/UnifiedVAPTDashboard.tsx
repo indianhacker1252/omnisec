@@ -125,6 +125,7 @@ export const UnifiedVAPTDashboard = () => {
   const [subdomainFilter, setSubdomainFilter] = useState<string | null>(null);
   const [activeResultTab, setActiveResultTab] = useState("findings");
   const [connectionStatus, setConnectionStatus] = useState<"pending" | "ok" | "failed">("pending");
+  const [verifyFinding, setVerifyFinding] = useState<Finding | null>(null);
 
   // AI Chatbox state
   const [aiThoughts, setAiThoughts] = useState<LiveLogEntry[]>([]);
