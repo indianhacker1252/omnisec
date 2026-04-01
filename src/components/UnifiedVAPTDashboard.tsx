@@ -23,6 +23,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { SubdomainAttackMap } from "@/components/SubdomainAttackMap";
 import { FindingDetailModal } from "@/components/FindingDetailModal";
+import { FindingVerificationPanel } from "@/components/FindingVerificationPanel";
 import { TargetTreeVisualization } from "@/components/TargetTreeVisualization";
 import { MutationMatrix } from "@/components/MutationMatrix";
 import {
