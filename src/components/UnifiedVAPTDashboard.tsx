@@ -9,7 +9,7 @@
  * - Real-time scan output via Supabase Realtime
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,6 +73,7 @@ interface LiveLogEntry {
 
 interface ScanResult {
   success: boolean;
+  scanId?: string;
   target: string;
   scanTime: number;
   discovery: { endpoints: number; subdomains: number; forms: number; apis: number; ports?: number[] };
@@ -94,16 +95,21 @@ const PHASE_LABELS: Record<string, string> = {
   connection_check: "🔌 Connection Check",
   discovery: "🔍 Endpoint Discovery + Port Scan",
   subdomain_enum: "🌐 Subdomain Enumeration",
+  takeover_check: "🔗 Subdomain Takeover Detection",
   fingerprint: "🖐 Fingerprinting + CVE Intel",
   payload_gen: "🎯 AI Payload Generation",
   owasp_scan: "⚡ OWASP Top 10 Assessment",
+  dom_xss: "🧠 DOM XSS Analysis",
   cors_scan: "🔀 CORS Misconfiguration",
   traversal_scan: "📂 Directory Traversal",
   cookie_scan: "🍪 Cookie/Session Audit",
   injection: "💉 Deep Injection Testing",
+  header_injection: "📡 Header Injection",
   auth: "🔑 Auth & Authorization (A01/A07)",
   business_logic: "🧠 Business Logic / IDOR",
+  cve_exploit: "🩹 CVE Exploit Validation",
   correlation: "🤖 AI Correlation + Attack Paths",
+  exploit_validation: "✅ Deterministic Validation",
   poc: "📋 POC Generation",
   learning: "📚 AI Learning Update",
   complete: "✅ Scan Complete",
@@ -116,6 +122,7 @@ export const UnifiedVAPTDashboard = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentPhase, setCurrentPhase] = useState("");
+  const [activeScanId, setActiveScanId] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [liveFindings, setLiveFindings] = useState(0);
@@ -133,6 +140,8 @@ export const UnifiedVAPTDashboard = () => {
 
   const logsEndRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const restoredOnMountRef = useRef(false);
+  const completionResolverRef = useRef<string | null>(null);
 
   // Settings
   const [enableLearning, setEnableLearning] = useState(true);
@@ -145,58 +154,7 @@ export const UnifiedVAPTDashboard = () => {
     confirmedVulns: 0, falsePositives: 0, accuracy: 0,
   });
 
-  useEffect(() => { loadLearningStats(); }, []);
-  useEffect(() => { logsEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [liveLogs]);
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [aiThoughts]);
-
-  // Realtime subscription
-  useEffect(() => {
-    if (!isScanning) return;
-    const channel = supabase
-      .channel(`scan-progress-live-${Date.now()}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "scan_progress" },
-        (payload: any) => {
-          const data = payload.new;
-          const isAIThought = data.message?.startsWith('🤖 AI:');
-          const actualProgress = data.progress;
-
-          if (actualProgress >= 0) {
-            setProgress(actualProgress);
-          }
-
-          const phaseLabel = PHASE_LABELS[data.phase] || data.phase;
-          if (!isAIThought) setCurrentPhase(phaseLabel);
-          setLiveFindings(data.findings_so_far || 0);
-          setLiveEndpoints(data.endpoints_discovered || 0);
-          if (data.current_endpoint) setCurrentEndpoint(data.current_endpoint);
-
-          // Connection status
-          if (data.phase === 'connection_check') {
-            if (data.message?.includes('✓')) setConnectionStatus('ok');
-            else if (data.message?.includes('❌')) setConnectionStatus('failed');
-          }
-
-          const logEntry: LiveLogEntry = {
-            timestamp: new Date().toLocaleTimeString(),
-            phase: data.phase,
-            message: data.message || phaseLabel,
-            progress: actualProgress,
-            findings: data.findings_so_far || 0,
-            endpoints: data.endpoints_discovered || 0,
-            currentEndpoint: data.current_endpoint || undefined,
-            isAIThought,
-          };
-
-          if (isAIThought) {
-            setAiThoughts(prev => [...prev, logEntry]);
-          }
-          setLiveLogs(prev => [...prev, logEntry]);
-        }
-      ).subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [isScanning]);
-
-  const loadLearningStats = async () => {
+  const loadLearningStats = useCallback(async () => {
     try {
       const [{ data: scans }, { data: actions }, { data: feedback }] = await Promise.all([
         supabase.from("scan_history").select("id, findings_count").limit(200),
@@ -216,12 +174,211 @@ export const UnifiedVAPTDashboard = () => {
         accuracy: Math.round((successActions / totalActions) * 100),
       });
     } catch {}
-  };
+  }, []);
+
+  useEffect(() => { loadLearningStats(); }, [loadLearningStats]);
+  useEffect(() => { logsEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [liveLogs]);
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [aiThoughts]);
+
+  const buildScanResultFromRecords = useCallback((scanId: string, targetValue: string, history: any, report: any): ScanResult => {
+    const reportPayload = history?.report && typeof history.report === "object" ? history.report : {};
+    const findings = Array.isArray(report?.findings)
+      ? report.findings
+      : Array.isArray(reportPayload.findings)
+        ? reportPayload.findings
+        : [];
+    const summary = report?.severity_counts || reportPayload.severityCounts || {
+      critical: findings.filter((f: any) => f.severity === "critical").length,
+      high: findings.filter((f: any) => f.severity === "high").length,
+      medium: findings.filter((f: any) => f.severity === "medium").length,
+      low: findings.filter((f: any) => f.severity === "low").length,
+      info: findings.filter((f: any) => f.severity === "info").length,
+    };
+    const discovery = reportPayload.discovery || {};
+
+    return {
+      success: true,
+      scanId,
+      target: targetValue,
+      scanTime: history?.duration_ms || reportPayload.scanTime || 0,
+      discovery: {
+        endpoints: discovery.endpoints || 0,
+        subdomains: discovery.subdomains || reportPayload.subdomains?.length || 0,
+        forms: discovery.forms || 0,
+        apis: discovery.apis || 0,
+        ports: discovery.ports || reportPayload.openPorts || [],
+      },
+      fingerprint: reportPayload.fingerprint || {},
+      findings,
+      attackPaths: reportPayload.attackPaths || [],
+      chainedExploits: reportPayload.chainedExploits || [],
+      summary,
+      recommendations: report?.recommendations || reportPayload.recommendations || [],
+      subdomains: reportPayload.subdomains || [],
+      targetTree: reportPayload.targetTree,
+      latestCVEs: reportPayload.latestCVEs || [],
+      openPorts: reportPayload.openPorts || discovery.ports || [],
+      detectedTech: reportPayload.detectedTech || [],
+    };
+  }, []);
+
+  const loadScanResultById = useCallback(async (scanId: string, fallbackTarget?: string) => {
+    try {
+      const [{ data: history }, { data: report }] = await Promise.all([
+        supabase.from("scan_history").select("*").eq("id", scanId).maybeSingle(),
+        supabase.from("security_reports").select("*").eq("scan_id", scanId).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      ]);
+
+      if (!history && !report) return false;
+
+      const targetValue = history?.target || fallbackTarget || target;
+      const result = buildScanResultFromRecords(scanId, targetValue, history, report);
+      setScanResult(result);
+      setTarget(targetValue || "");
+      setProgress(100);
+      setCurrentPhase("✅ Scan complete!");
+      setCurrentEndpoint("");
+      setConnectionStatus("ok");
+      setIsScanning(false);
+      setActiveScanId(scanId);
+      await loadLearningStats();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      completionResolverRef.current = null;
+    }
+  }, [buildScanResultFromRecords, loadLearningStats, target]);
+
+  const applyProgressEvent = useCallback((data: any) => {
+    if (!data) return;
+    if (activeScanId && data.scan_id !== activeScanId) return;
+    if (!activeScanId && data.scan_id) {
+      setActiveScanId(data.scan_id);
+    }
+
+    const isAIThought = data.message?.startsWith("🤖 AI:");
+    const actualProgress = typeof data.progress === "number" ? data.progress : 0;
+
+    if (actualProgress >= 0) setProgress(actualProgress);
+
+    const phaseLabel = PHASE_LABELS[data.phase] || data.phase;
+    if (!isAIThought) setCurrentPhase(phaseLabel);
+    setLiveFindings(data.findings_so_far || 0);
+    setLiveEndpoints(data.endpoints_discovered || 0);
+    if (data.current_endpoint) setCurrentEndpoint(data.current_endpoint);
+
+    if (data.phase === "connection_check") {
+      if (data.message?.includes("✓")) setConnectionStatus("ok");
+      else if (data.message?.includes("❌")) setConnectionStatus("failed");
+    }
+
+    const timestamp = data.created_at ? new Date(data.created_at).toLocaleTimeString() : new Date().toLocaleTimeString();
+    const logEntry: LiveLogEntry = {
+      timestamp,
+      phase: data.phase,
+      message: data.message || phaseLabel,
+      progress: actualProgress,
+      findings: data.findings_so_far || 0,
+      endpoints: data.endpoints_discovered || 0,
+      currentEndpoint: data.current_endpoint || undefined,
+      isAIThought,
+    };
+
+    if (isAIThought) {
+      setAiThoughts(prev => prev.some(entry => entry.timestamp === timestamp && entry.message === logEntry.message) ? prev : [...prev, logEntry]);
+    }
+    setLiveLogs(prev => prev.some(entry => entry.timestamp === timestamp && entry.message === logEntry.message) ? prev : [...prev, logEntry]);
+
+    if ((data.phase === "complete" || actualProgress >= 100) && data.scan_id && completionResolverRef.current !== data.scan_id) {
+      completionResolverRef.current = data.scan_id;
+      void loadScanResultById(data.scan_id, target);
+    }
+  }, [activeScanId, loadScanResultById, target]);
+
+  const restoreRunningScan = useCallback(async (preferredTarget?: string) => {
+    try {
+      let query = supabase
+        .from("scan_history")
+        .select("*")
+        .eq("module", "autonomous_vapt")
+        .eq("status", "running")
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      const cleanPreferredTarget = preferredTarget?.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "").toLowerCase();
+      if (cleanPreferredTarget) {
+        query = query.ilike("target", `%${cleanPreferredTarget}%`);
+      }
+
+      const { data: runningScans } = await query;
+      const activeScan = runningScans?.[0];
+      if (!activeScan?.id) return false;
+
+      setActiveScanId(activeScan.id);
+      setIsScanning(true);
+      setConnectionStatus("ok");
+      setCurrentPhase("Reconnected to live scan...");
+      if (activeScan.target) setTarget(activeScan.target);
+
+      const { data: progressRows } = await supabase
+        .from("scan_progress")
+        .select("*")
+        .eq("scan_id", activeScan.id)
+        .order("created_at", { ascending: true })
+        .limit(250);
+
+      progressRows?.forEach(row => applyProgressEvent(row));
+      return true;
+    } catch {
+      return false;
+    }
+  }, [applyProgressEvent]);
+
+  useEffect(() => {
+    if (restoredOnMountRef.current) return;
+    restoredOnMountRef.current = true;
+    void restoreRunningScan();
+  }, [restoreRunningScan]);
+
+  useEffect(() => {
+    if (!isScanning && !activeScanId) return;
+
+    const channel = supabase
+      .channel(`scan-progress-live-${activeScanId || "pending"}-${Date.now()}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "scan_progress" }, (payload: any) => {
+        const data = payload.new;
+        if (activeScanId && data.scan_id !== activeScanId) return;
+        if (!activeScanId && !isScanning) return;
+        applyProgressEvent(data);
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "scan_history" }, (payload: any) => {
+        const data = payload.new;
+        if (!data) return;
+        if (activeScanId && data.id !== activeScanId) return;
+
+        if (data.status === "failed") {
+          setIsScanning(false);
+          setConnectionStatus("failed");
+          setCurrentPhase("❌ Scan failed");
+        }
+
+        if (data.status === "completed" && data.id && completionResolverRef.current !== data.id) {
+          completionResolverRef.current = data.id;
+          void loadScanResultById(data.id, data.target);
+        }
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [activeScanId, applyProgressEvent, isScanning, loadScanResultById]);
 
   const runAutonomousVAPT = async () => {
     if (!target.trim()) { toast({ title: "Target Required", variant: "destructive" }); return; }
 
     setIsScanning(true);
+    setActiveScanId(null);
+    completionResolverRef.current = null;
     setProgress(0);
     setLiveFindings(0);
     setLiveEndpoints(0);
@@ -239,13 +396,22 @@ export const UnifiedVAPTDashboard = () => {
         body: { target, action: "full_scan", modules: ["all"], maxDepth, enableLearning, retryWithAI, generatePOC },
       });
 
-      if (response.error) { await pollForResults(target); return; }
+      if (response.error) {
+        const resumed = await restoreRunningScan(target);
+        if (resumed) {
+          toast({ title: "Scan continues in background", description: "Live progress remains connected until the report is ready." });
+          return;
+        }
+        throw response.error;
+      }
 
       const result = response.data as ScanResult;
+      if (result.scanId) setActiveScanId(result.scanId);
       if (result.connectionFailed) {
         setConnectionStatus("failed");
         toast({ title: "Connection Failed", description: `${target} is unreachable`, variant: "destructive" });
         setIsScanning(false);
+        setActiveScanId(null);
         return;
       }
 
@@ -253,12 +419,19 @@ export const UnifiedVAPTDashboard = () => {
       setProgress(100);
       setCurrentPhase("✅ Scan complete!");
       setConnectionStatus("ok");
+      setIsScanning(false);
       await loadLearningStats();
       toast({ title: "VAPT Complete", description: `${result.findings?.length || 0} findings | ${result.discovery?.subdomains || 0} subdomains | ${result.openPorts?.length || 0} ports` });
-    } catch {
-      await pollForResults(target);
-    } finally {
+    } catch (error: any) {
+      const resumed = await restoreRunningScan(target);
+      if (resumed) {
+        toast({ title: "Background scan resumed", description: "Live updates will continue while the backend finishes." });
+        return;
+      }
       setIsScanning(false);
+      setActiveScanId(null);
+      setConnectionStatus("failed");
+      toast({ title: "Scan Failed", description: error?.message || "Unable to start the scan", variant: "destructive" });
     }
   };
 
