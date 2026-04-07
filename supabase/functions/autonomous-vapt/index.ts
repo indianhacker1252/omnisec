@@ -282,22 +282,31 @@ serve(async (req) => {
       allFindings.push(...takeoverFindings);
       await emitProgress('takeover_check', 3, 18, `Takeover: ${takeoverFindings.length} findings`);
 
-      // ══════════ PHASE 4: FINGERPRINT + CVE ══════════
+      // ══════════ PHASE 4: FINGERPRINT + WAF + CVE ══════════
       phaseStart = Date.now();
-      await emitProgress('fingerprint', 4, 19, 'Fingerprinting + CVE intelligence...');
+      await emitProgress('fingerprint', 4, 19, 'Fingerprinting + WAF detection + CVE intelligence...');
       const fingerprint = await fingerprintTarget(targetUrl, discoveryResults);
-      const latestCVEs = await fetchLatestCVEs(detectedTech, fingerprint.server);
-      await emitProgress('fingerprint', 4, 21, `Tech: ${(fingerprint.technologies || []).join(', ')} | ${latestCVEs.length} CVEs`);
+      
+      // WAF Fingerprinting
+      const wafResult = await detectWAF(targetUrl);
+      if (wafResult.detected) {
+        fingerprint.waf = wafResult;
+        await emitAIThought(`WAF detected: ${wafResult.name} (${wafResult.confidence}% confidence). Adapting payloads for evasion.`, 'fingerprint', 4);
+        if (wafResult.name) detectedTech.push(`WAF:${wafResult.name}`);
+      }
+      
+      const latestCVEs = await fetchLatestCVEs(detectedTech.filter(t => !t.startsWith('WAF:')), fingerprint.server);
+      await emitProgress('fingerprint', 4, 21, `Tech: ${(fingerprint.technologies || []).join(', ')} | WAF: ${wafResult.detected ? wafResult.name : 'None'} | ${latestCVEs.length} CVEs`);
 
       // ══════════ PHASE 5: AI PAYLOAD GENERATION ══════════
       phaseStart = Date.now();
-      await emitProgress('payload_gen', 5, 22, 'Generating adaptive AI payloads with hacktivity learning...');
+      await emitProgress('payload_gen', 5, 22, 'Generating adaptive AI payloads with hacktivity learning + WAF evasion...');
       const previousPayloads = await getFailedPayloads(supabase, targetUrl.hostname);
       const pastSuccesses = await loadPastSuccessfulAttacks(supabase, targetUrl.hostname, user.id);
       const hacktivityPatterns = await fetchHacktivityPatterns(LOVABLE_API_KEY, detectedTech);
       const aiPayloads = await generateOwaspPayloads(LOVABLE_API_KEY, detectedTech, openPorts, fingerprint, previousPayloads, latestCVEs, pastSuccesses, hacktivityPatterns);
 
-      await emitAIThought(`Generated ${Object.values(aiPayloads).flat().length} payloads. ${pastSuccesses.length} past successes + ${hacktivityPatterns.length} hacktivity patterns inform priority.`, 'payload_gen', 5);
+      await emitAIThought(`Generated ${Object.values(aiPayloads).flat().length} payloads. ${pastSuccesses.length} past successes + ${hacktivityPatterns.length} hacktivity patterns inform priority. WAF evasion: ${wafResult.detected ? 'ACTIVE' : 'standard'}.`, 'payload_gen', 5);
       await emitProgress('payload_gen', 5, 25, `Payloads ready for ${Object.keys(aiPayloads).length} categories`);
 
       // ══════════ PHASE 6: OWASP TOP 10 — ALL PARAMS ON ALL ENDPOINTS ══════════
@@ -1277,21 +1286,55 @@ async function discoverEndpoints(
     }));
   }
 
-  // Common path discovery
+  // SecLists-style common path discovery (expanded wordlist)
   const commonPaths = [
-    '/api', '/api/v1', '/api/v2', '/graphql', '/admin', '/login', '/signin', '/auth', '/register',
-    '/dashboard', '/panel', '/swagger', '/api-docs', '/robots.txt', '/sitemap.xml',
-    '/wp-admin', '/wp-json', '/wp-login.php', '/phpinfo.php', '/server-status', '/.git/config',
-    '/.git/HEAD', '/.env', '/health', '/metrics', '/debug', '/test', '/backup', '/upload',
-    '/.svn/entries', '/.DS_Store', '/web.config', '/crossdomain.xml', '/wp-config.php.bak',
-    '/.htpasswd', '/config.yml', '/search', '/product', '/user', '/account',
-    '/console', '/actuator', '/actuator/env', '/actuator/health', '/elmah.axd',
-    '/wp-content/debug.log', '/error_log', '/.well-known/security.txt', '/security.txt',
-    '/api/users', '/api/config', '/xmlrpc.php', '/readme.html',
-    '/phpmyadmin', '/adminer', '/solr/', '/jenkins/', '/manager/html',
-    '/reset', '/forgot', '/password', '/download', '/export',
-    '/Dockerfile', '/docker-compose.yml', '/.dockerenv', '/package.json',
-    '/composer.json', '/Gemfile', '/requirements.txt', '/go.mod',
+    // API & Documentation
+    '/api', '/api/v1', '/api/v2', '/api/v3', '/graphql', '/graphiql', '/swagger', '/swagger-ui', '/swagger-ui.html',
+    '/api-docs', '/api/docs', '/openapi.json', '/swagger.json', '/swagger.yaml', '/redoc',
+    '/api/health', '/api/status', '/api/version', '/api/config', '/api/users', '/api/admin',
+    // Authentication & Admin
+    '/admin', '/administrator', '/login', '/signin', '/signup', '/register', '/auth', '/oauth', '/sso',
+    '/dashboard', '/panel', '/cpanel', '/console', '/portal', '/manage', '/management',
+    '/wp-admin', '/wp-login.php', '/wp-json', '/wp-json/wp/v2/users', '/xmlrpc.php',
+    // Sensitive files & configs
+    '/robots.txt', '/sitemap.xml', '/security.txt', '/.well-known/security.txt',
+    '/.git/config', '/.git/HEAD', '/.gitignore', '/.env', '/.env.bak', '/.env.local',
+    '/.svn/entries', '/.svn/wc.db', '/.DS_Store', '/.htaccess', '/.htpasswd',
+    '/web.config', '/crossdomain.xml', '/clientaccesspolicy.xml',
+    '/config.yml', '/config.json', '/config.php', '/config.xml', '/configuration.php',
+    '/wp-config.php.bak', '/wp-config.php.save', '/wp-config.php~',
+    // Server info & debug
+    '/phpinfo.php', '/info.php', '/test.php', '/server-status', '/server-info',
+    '/health', '/metrics', '/debug', '/debug/vars', '/debug/pprof',
+    '/actuator', '/actuator/env', '/actuator/health', '/actuator/info', '/actuator/mappings',
+    '/actuator/beans', '/actuator/configprops', '/actuator/heapdump', '/actuator/threaddump',
+    '/elmah.axd', '/trace.axd', '/error_log', '/errors.log',
+    // DevOps & CI/CD
+    '/Dockerfile', '/docker-compose.yml', '/.dockerenv', '/Vagrantfile',
+    '/package.json', '/package-lock.json', '/composer.json', '/composer.lock',
+    '/Gemfile', '/Gemfile.lock', '/requirements.txt', '/go.mod', '/go.sum',
+    '/Makefile', '/Rakefile', '/Gruntfile.js', '/gulpfile.js', '/webpack.config.js',
+    '/.travis.yml', '/.gitlab-ci.yml', '/Jenkinsfile', '/.github/workflows',
+    // Database & Admin tools
+    '/phpmyadmin', '/pma', '/adminer', '/adminer.php', '/solr/', '/kibana', '/grafana',
+    '/jenkins/', '/manager/html', '/jmx-console', '/web-console',
+    '/cgi-bin/', '/cgi-bin/test-cgi', '/cgi-bin/printenv.pl',
+    // User & Account paths
+    '/user', '/users', '/account', '/profile', '/settings', '/preferences',
+    '/reset', '/forgot', '/password', '/download', '/export', '/import', '/upload',
+    '/search', '/product', '/products', '/category', '/cart', '/checkout', '/order', '/orders',
+    // Backup & temp files
+    '/backup', '/backups', '/bak', '/old', '/temp', '/tmp', '/cache', '/log', '/logs',
+    '/dump.sql', '/database.sql', '/db.sql', '/data.sql', '/backup.zip', '/backup.tar.gz',
+    '/site.tar.gz', '/www.zip', '/public.zip',
+    // Common CMS paths
+    '/wp-content/debug.log', '/wp-content/uploads/', '/wp-includes/',
+    '/readme.html', '/license.txt', '/changelog.txt', '/CHANGELOG.md', '/README.md',
+    '/joomla/', '/administrator/', '/components/', '/modules/',
+    '/drupal/', '/node/', '/sites/default/settings.php',
+    // Cloud & infra
+    '/.aws/credentials', '/.azure/', '/metadata', '/latest/meta-data/',
+    '/server/config', '/status', '/monitor', '/healthcheck',
   ];
 
   for (let i = 0; i < commonPaths.length; i += 10) {
@@ -2262,7 +2305,106 @@ async function performAICorrelation(findings: Finding[], discovery: any, fingerp
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// UTILITY
+// WAF FINGERPRINTING (WafW00f-style)
+// ═══════════════════════════════════════════════════════════════════════════════
+const WAF_SIGNATURES: Record<string, { headers?: string[]; body?: string[]; cookies?: string[]; status?: number[] }> = {
+  'Cloudflare': { headers: ['cf-ray', 'cf-cache-status', '__cfduid', 'cf-request-id'], body: ['Attention Required! | Cloudflare', 'cloudflare-nginx', 'cf-error-details'], cookies: ['__cfruid', '__cfuid'] },
+  'AWS WAF': { headers: ['x-amzn-requestid', 'x-amz-cf-id'], body: ['<TITLE>ERROR: The request could not be satisfied</TITLE>', 'Request blocked', 'Generated by cloudfront'] },
+  'Akamai': { headers: ['x-akamai-transformed', 'akamai-grn', 'x-check-cacheable'], body: ['Access Denied', 'AkamaiGHost'], cookies: ['akamai'] },
+  'Imperva/Incapsula': { headers: ['x-iinfo', 'x-cdn'], body: ['Incapsula incident ID', 'Request unsuccessful', '_Incapsula_Resource'], cookies: ['incap_ses', 'visid_incap'] },
+  'ModSecurity': { body: ['ModSecurity', 'This error was generated by Mod_Security', 'Not Acceptable', 'mod_security'], status: [406] },
+  'F5 BIG-IP ASM': { headers: ['x-wa-info'], cookies: ['TS0', 'BIGipServer', 'f5_cspm'], body: ['The requested URL was rejected'] },
+  'Sucuri': { headers: ['x-sucuri-id', 'x-sucuri-cache', 'server: Sucuri'], body: ['Sucuri WebSite Firewall', 'Access Denied - Sucuri'], cookies: ['sucuri_cloudproxy'] },
+  'Barracuda': { headers: ['barra_counter_session'], cookies: ['barra_counter_session'], body: ['Barracuda Web Application Firewall'] },
+  'Fortinet FortiWeb': { cookies: ['FORTIWAFSID'], body: ['FortiGuard Intrusion Prevention', '.fgd_icon'] },
+  'Wordfence': { body: ['This response was generated by Wordfence', 'wordfence-ls'], cookies: ['wfvt_'] },
+  'DenyAll': { headers: ['sessioncookie'], body: ['Condition Intercepted'] },
+  'StackPath': { headers: ['x-sp-url', 'x-sp-waf-request-id'], body: ['StackPath'] },
+  'Fastly': { headers: ['x-fastly-request-id', 'fastly-restarts'], body: ['Fastly error:'] },
+  'Reblaze': { headers: ['rbzid'], cookies: ['rbzid'], body: ['Access Denied (403)'] },
+  'Wallarm': { headers: ['wallarm-waf-blocked'] },
+};
+
+async function detectWAF(target: URL): Promise<{ detected: boolean; name: string; confidence: number; evidence: string[] }> {
+  const result = { detected: false, name: '', confidence: 0, evidence: [] as string[] };
+  
+  // Test 1: Normal request headers/cookies
+  try {
+    const normalResp = await fetchWithTimeout(target.toString(), 8000);
+    const headers = Object.fromEntries(normalResp.headers.entries());
+    const headerStr = JSON.stringify(headers).toLowerCase();
+    const body = await normalResp.text().catch(() => '');
+    const cookieHeader = normalResp.headers.get('set-cookie') || '';
+    
+    for (const [waf, sig] of Object.entries(WAF_SIGNATURES)) {
+      let score = 0;
+      const ev: string[] = [];
+      
+      if (sig.headers) {
+        for (const h of sig.headers) {
+          if (headerStr.includes(h.toLowerCase())) { score += 30; ev.push(`Header: ${h}`); }
+        }
+      }
+      if (sig.cookies) {
+        for (const c of sig.cookies) {
+          if (cookieHeader.toLowerCase().includes(c.toLowerCase())) { score += 25; ev.push(`Cookie: ${c}`); }
+        }
+      }
+      if (sig.body) {
+        for (const b of sig.body) {
+          if (body.includes(b)) { score += 20; ev.push(`Body: "${b.slice(0, 40)}"`); }
+        }
+      }
+      
+      if (score > result.confidence) {
+        result.detected = score >= 25;
+        result.name = waf;
+        result.confidence = Math.min(score, 100);
+        result.evidence = ev;
+      }
+    }
+  } catch {}
+  
+  // Test 2: Trigger WAF with malicious payload
+  if (!result.detected || result.confidence < 60) {
+    try {
+      const triggerUrl = `${target.toString()}?test=<script>alert(1)</script>&id=1' OR 1=1--`;
+      const triggerResp = await fetchWithTimeout(triggerUrl, 8000);
+      const triggerBody = await triggerResp.text().catch(() => '');
+      const triggerHeaders = Object.fromEntries(triggerResp.headers.entries());
+      
+      if (triggerResp.status === 403 || triggerResp.status === 406 || triggerResp.status === 429) {
+        result.evidence.push(`Blocked: HTTP ${triggerResp.status} on malicious payload`);
+        
+        for (const [waf, sig] of Object.entries(WAF_SIGNATURES)) {
+          if (sig.body?.some(b => triggerBody.includes(b))) {
+            result.detected = true;
+            result.name = waf;
+            result.confidence = Math.max(result.confidence, 85);
+            result.evidence.push(`Trigger body matched: ${waf}`);
+            break;
+          }
+          if (sig.status?.includes(triggerResp.status)) {
+            result.detected = true;
+            result.name = result.name || waf;
+            result.confidence = Math.max(result.confidence, 60);
+          }
+        }
+        
+        if (!result.name && (triggerResp.status === 403 || triggerResp.status === 406)) {
+          result.detected = true;
+          result.name = 'Unknown WAF';
+          result.confidence = Math.max(result.confidence, 50);
+          result.evidence.push('Generic block response on XSS/SQLi probe');
+        }
+      }
+    } catch {}
+  }
+  
+  return result;
+}
+
+
 // ═══════════════════════════════════════════════════════════════════════════════
 async function fetchWithTimeout(url: string, timeout: number, options?: RequestInit): Promise<Response> {
   const controller = new AbortController();
