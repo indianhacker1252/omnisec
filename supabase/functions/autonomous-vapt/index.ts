@@ -282,22 +282,31 @@ serve(async (req) => {
       allFindings.push(...takeoverFindings);
       await emitProgress('takeover_check', 3, 18, `Takeover: ${takeoverFindings.length} findings`);
 
-      // ══════════ PHASE 4: FINGERPRINT + CVE ══════════
+      // ══════════ PHASE 4: FINGERPRINT + WAF + CVE ══════════
       phaseStart = Date.now();
-      await emitProgress('fingerprint', 4, 19, 'Fingerprinting + CVE intelligence...');
+      await emitProgress('fingerprint', 4, 19, 'Fingerprinting + WAF detection + CVE intelligence...');
       const fingerprint = await fingerprintTarget(targetUrl, discoveryResults);
-      const latestCVEs = await fetchLatestCVEs(detectedTech, fingerprint.server);
-      await emitProgress('fingerprint', 4, 21, `Tech: ${(fingerprint.technologies || []).join(', ')} | ${latestCVEs.length} CVEs`);
+      
+      // WAF Fingerprinting
+      const wafResult = await detectWAF(targetUrl);
+      if (wafResult.detected) {
+        fingerprint.waf = wafResult;
+        await emitAIThought(`WAF detected: ${wafResult.name} (${wafResult.confidence}% confidence). Adapting payloads for evasion.`, 'fingerprint', 4);
+        if (wafResult.name) detectedTech.push(`WAF:${wafResult.name}`);
+      }
+      
+      const latestCVEs = await fetchLatestCVEs(detectedTech.filter(t => !t.startsWith('WAF:')), fingerprint.server);
+      await emitProgress('fingerprint', 4, 21, `Tech: ${(fingerprint.technologies || []).join(', ')} | WAF: ${wafResult.detected ? wafResult.name : 'None'} | ${latestCVEs.length} CVEs`);
 
       // ══════════ PHASE 5: AI PAYLOAD GENERATION ══════════
       phaseStart = Date.now();
-      await emitProgress('payload_gen', 5, 22, 'Generating adaptive AI payloads with hacktivity learning...');
+      await emitProgress('payload_gen', 5, 22, 'Generating adaptive AI payloads with hacktivity learning + WAF evasion...');
       const previousPayloads = await getFailedPayloads(supabase, targetUrl.hostname);
       const pastSuccesses = await loadPastSuccessfulAttacks(supabase, targetUrl.hostname, user.id);
       const hacktivityPatterns = await fetchHacktivityPatterns(LOVABLE_API_KEY, detectedTech);
       const aiPayloads = await generateOwaspPayloads(LOVABLE_API_KEY, detectedTech, openPorts, fingerprint, previousPayloads, latestCVEs, pastSuccesses, hacktivityPatterns);
 
-      await emitAIThought(`Generated ${Object.values(aiPayloads).flat().length} payloads. ${pastSuccesses.length} past successes + ${hacktivityPatterns.length} hacktivity patterns inform priority.`, 'payload_gen', 5);
+      await emitAIThought(`Generated ${Object.values(aiPayloads).flat().length} payloads. ${pastSuccesses.length} past successes + ${hacktivityPatterns.length} hacktivity patterns inform priority. WAF evasion: ${wafResult.detected ? 'ACTIVE' : 'standard'}.`, 'payload_gen', 5);
       await emitProgress('payload_gen', 5, 25, `Payloads ready for ${Object.keys(aiPayloads).length} categories`);
 
       // ══════════ PHASE 6: OWASP TOP 10 — ALL PARAMS ON ALL ENDPOINTS ══════════
