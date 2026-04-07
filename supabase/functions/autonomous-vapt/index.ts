@@ -1286,21 +1286,55 @@ async function discoverEndpoints(
     }));
   }
 
-  // Common path discovery
+  // SecLists-style common path discovery (expanded wordlist)
   const commonPaths = [
-    '/api', '/api/v1', '/api/v2', '/graphql', '/admin', '/login', '/signin', '/auth', '/register',
-    '/dashboard', '/panel', '/swagger', '/api-docs', '/robots.txt', '/sitemap.xml',
-    '/wp-admin', '/wp-json', '/wp-login.php', '/phpinfo.php', '/server-status', '/.git/config',
-    '/.git/HEAD', '/.env', '/health', '/metrics', '/debug', '/test', '/backup', '/upload',
-    '/.svn/entries', '/.DS_Store', '/web.config', '/crossdomain.xml', '/wp-config.php.bak',
-    '/.htpasswd', '/config.yml', '/search', '/product', '/user', '/account',
-    '/console', '/actuator', '/actuator/env', '/actuator/health', '/elmah.axd',
-    '/wp-content/debug.log', '/error_log', '/.well-known/security.txt', '/security.txt',
-    '/api/users', '/api/config', '/xmlrpc.php', '/readme.html',
-    '/phpmyadmin', '/adminer', '/solr/', '/jenkins/', '/manager/html',
-    '/reset', '/forgot', '/password', '/download', '/export',
-    '/Dockerfile', '/docker-compose.yml', '/.dockerenv', '/package.json',
-    '/composer.json', '/Gemfile', '/requirements.txt', '/go.mod',
+    // API & Documentation
+    '/api', '/api/v1', '/api/v2', '/api/v3', '/graphql', '/graphiql', '/swagger', '/swagger-ui', '/swagger-ui.html',
+    '/api-docs', '/api/docs', '/openapi.json', '/swagger.json', '/swagger.yaml', '/redoc',
+    '/api/health', '/api/status', '/api/version', '/api/config', '/api/users', '/api/admin',
+    // Authentication & Admin
+    '/admin', '/administrator', '/login', '/signin', '/signup', '/register', '/auth', '/oauth', '/sso',
+    '/dashboard', '/panel', '/cpanel', '/console', '/portal', '/manage', '/management',
+    '/wp-admin', '/wp-login.php', '/wp-json', '/wp-json/wp/v2/users', '/xmlrpc.php',
+    // Sensitive files & configs
+    '/robots.txt', '/sitemap.xml', '/security.txt', '/.well-known/security.txt',
+    '/.git/config', '/.git/HEAD', '/.gitignore', '/.env', '/.env.bak', '/.env.local',
+    '/.svn/entries', '/.svn/wc.db', '/.DS_Store', '/.htaccess', '/.htpasswd',
+    '/web.config', '/crossdomain.xml', '/clientaccesspolicy.xml',
+    '/config.yml', '/config.json', '/config.php', '/config.xml', '/configuration.php',
+    '/wp-config.php.bak', '/wp-config.php.save', '/wp-config.php~',
+    // Server info & debug
+    '/phpinfo.php', '/info.php', '/test.php', '/server-status', '/server-info',
+    '/health', '/metrics', '/debug', '/debug/vars', '/debug/pprof',
+    '/actuator', '/actuator/env', '/actuator/health', '/actuator/info', '/actuator/mappings',
+    '/actuator/beans', '/actuator/configprops', '/actuator/heapdump', '/actuator/threaddump',
+    '/elmah.axd', '/trace.axd', '/error_log', '/errors.log',
+    // DevOps & CI/CD
+    '/Dockerfile', '/docker-compose.yml', '/.dockerenv', '/Vagrantfile',
+    '/package.json', '/package-lock.json', '/composer.json', '/composer.lock',
+    '/Gemfile', '/Gemfile.lock', '/requirements.txt', '/go.mod', '/go.sum',
+    '/Makefile', '/Rakefile', '/Gruntfile.js', '/gulpfile.js', '/webpack.config.js',
+    '/.travis.yml', '/.gitlab-ci.yml', '/Jenkinsfile', '/.github/workflows',
+    // Database & Admin tools
+    '/phpmyadmin', '/pma', '/adminer', '/adminer.php', '/solr/', '/kibana', '/grafana',
+    '/jenkins/', '/manager/html', '/jmx-console', '/web-console',
+    '/cgi-bin/', '/cgi-bin/test-cgi', '/cgi-bin/printenv.pl',
+    // User & Account paths
+    '/user', '/users', '/account', '/profile', '/settings', '/preferences',
+    '/reset', '/forgot', '/password', '/download', '/export', '/import', '/upload',
+    '/search', '/product', '/products', '/category', '/cart', '/checkout', '/order', '/orders',
+    // Backup & temp files
+    '/backup', '/backups', '/bak', '/old', '/temp', '/tmp', '/cache', '/log', '/logs',
+    '/dump.sql', '/database.sql', '/db.sql', '/data.sql', '/backup.zip', '/backup.tar.gz',
+    '/site.tar.gz', '/www.zip', '/public.zip',
+    // Common CMS paths
+    '/wp-content/debug.log', '/wp-content/uploads/', '/wp-includes/',
+    '/readme.html', '/license.txt', '/changelog.txt', '/CHANGELOG.md', '/README.md',
+    '/joomla/', '/administrator/', '/components/', '/modules/',
+    '/drupal/', '/node/', '/sites/default/settings.php',
+    // Cloud & infra
+    '/.aws/credentials', '/.azure/', '/metadata', '/latest/meta-data/',
+    '/server/config', '/status', '/monitor', '/healthcheck',
   ];
 
   for (let i = 0; i < commonPaths.length; i += 10) {
