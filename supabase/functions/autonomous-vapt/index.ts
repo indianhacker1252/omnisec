@@ -22,28 +22,28 @@ const corsHeaders = {
 };
 
 const PHASE_BUDGETS: Record<string, number> = {
-  connection_check: 12000,
-  discovery: 55000,
-  subdomain_enum: 35000,
-  takeover_check: 20000,
-  fingerprint: 12000,
-  payload_gen: 10000,
-  owasp_scan: 60000,
-  dom_xss: 12000,
-  cors_scan: 12000,
-  traversal_scan: 12000,
-  cookie_scan: 8000,
-  injection: 50000,
-  header_injection: 15000,
-  auth: 12000,
-  business_logic: 8000,
-  cve_exploit: 20000,
-  correlation: 10000,
-  exploit_validation: 15000,
-  poc: 12000,
-  learning: 5000,
+  connection_check: 5000,
+  discovery: 25000,
+  subdomain_enum: 15000,
+  takeover_check: 8000,
+  fingerprint: 8000,
+  payload_gen: 5000,
+  owasp_scan: 25000,
+  dom_xss: 5000,
+  cors_scan: 5000,
+  traversal_scan: 5000,
+  cookie_scan: 4000,
+  injection: 20000,
+  header_injection: 5000,
+  auth: 5000,
+  business_logic: 4000,
+  cve_exploit: 8000,
+  correlation: 5000,
+  exploit_validation: 8000,
+  poc: 5000,
+  learning: 3000,
 };
-const MAX_SCAN_TIME_MS = 290000;
+const MAX_SCAN_TIME_MS = 140000;
 const TOTAL_PHASES = 20;
 
 interface Finding {
