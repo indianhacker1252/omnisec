@@ -976,6 +976,7 @@ export const UnifiedVAPTDashboard = () => {
           AI learns from every scan. Use 👍/👎 on findings to train the model. The AI chatbox lets you correct reasoning in real-time to reduce false positives.
         </p>
       </Card>
+      </>}
     </div>
   );
 };
