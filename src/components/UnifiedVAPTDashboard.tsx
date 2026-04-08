@@ -715,6 +715,12 @@ export const UnifiedVAPTDashboard = () => {
         )}
       </Card>
 
+      {/* Scan History Tab */}
+      {mainTab === "history" && <ScanHistoryViewer />}
+
+      {/* Scanner Tab Content */}
+      {mainTab === "scanner" && <>
+
       {/* Mutation Matrix */}
       {(isScanning || liveLogs.some(l => l.message?.includes('🧬'))) && (
         <MutationMatrix scanId={undefined} isActive={isScanning} />
