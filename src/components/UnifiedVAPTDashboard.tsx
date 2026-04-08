@@ -424,7 +424,7 @@ export const UnifiedVAPTDashboard = () => {
       const result = response.data as ScanResult;
       if (result.scanId) {
         setActiveScanId(result.scanId);
-        setActiveScan(prev => prev ? { ...prev, scanId: result.scanId! } : null);
+        updateScanProgress({ scanId: result.scanId });
       }
       if (result.connectionFailed) {
         setConnectionStatus("failed");
