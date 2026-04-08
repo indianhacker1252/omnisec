@@ -400,6 +400,18 @@ export const UnifiedVAPTDashboard = () => {
         body: { target, action: "full_scan", modules: ["all"], maxDepth, enableLearning, retryWithAI, generatePOC },
       });
 
+      // Register with background scan context so it persists across route changes
+      setActiveScan({
+        scanId: "",
+        target: target.replace(/^https?:\/\//, "").split("/")[0],
+        progress: 5,
+        phase: "Initializing...",
+        findings: 0,
+        endpoints: 0,
+        status: "running",
+        startedAt: new Date(),
+      });
+
       if (response.error) {
         const resumed = await restoreRunningScan(target);
         if (resumed) {
@@ -410,7 +422,10 @@ export const UnifiedVAPTDashboard = () => {
       }
 
       const result = response.data as ScanResult;
-      if (result.scanId) setActiveScanId(result.scanId);
+      if (result.scanId) {
+        setActiveScanId(result.scanId);
+        setActiveScan(prev => prev ? { ...prev, scanId: result.scanId! } : null);
+      }
       if (result.connectionFailed) {
         setConnectionStatus("failed");
         toast({ title: "Connection Failed", description: `${target} is unreachable`, variant: "destructive" });
