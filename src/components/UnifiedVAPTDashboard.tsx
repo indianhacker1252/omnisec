@@ -119,6 +119,8 @@ const PHASE_LABELS: Record<string, string> = {
 
 export const UnifiedVAPTDashboard = () => {
   const { toast } = useToast();
+  const { setActiveScan, updateScanProgress, addCompletedScan } = useBackgroundScan();
+  const [mainTab, setMainTab] = useState<"scanner" | "history">("scanner");
 
   const [target, setTarget] = useState("");
   const [isScanning, setIsScanning] = useState(false);
