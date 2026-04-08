@@ -26,6 +26,8 @@ import { FindingDetailModal } from "@/components/FindingDetailModal";
 import { FindingVerificationPanel } from "@/components/FindingVerificationPanel";
 import { TargetTreeVisualization } from "@/components/TargetTreeVisualization";
 import { MutationMatrix } from "@/components/MutationMatrix";
+import { ScanHistoryViewer } from "@/components/ScanHistoryViewer";
+import { useBackgroundScan } from "@/context/BackgroundScanContext";
 import {
   Brain, Zap, Target, Shield, Globe, Play, RefreshCw, AlertTriangle,
   CheckCircle, TrendingUp, Activity, Eye, ThumbsUp, ThumbsDown,
