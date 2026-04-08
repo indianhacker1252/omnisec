@@ -393,6 +393,18 @@ serve(async (req) => {
       allFindings.push(...injectionFindings);
       await emitProgress('injection', 11, 68, `Injection: ${injectionFindings.length} findings`);
 
+      // ══════ DEADLINE CHECK AFTER INJECTION ══════
+      if (isNearDeadline()) {
+        clearTimeout(timeoutId);
+        const { severityCounts, findings } = await saveResultsToDB('completed');
+        await emitProgress('complete', TOTAL_PHASES, 100, `Scan complete (fast). ${findings.length} findings.`);
+        return new Response(JSON.stringify({
+          success: true, target: targetUrl.toString(), scanTime: Date.now() - scanStart,
+          discovery: { endpoints: discoveredEndpoints.length, subdomains: discoveredSubdomains.length, forms: discoveryResults.forms?.length || 0, apis: 0, ports: openPorts },
+          fingerprint: {}, findings, summary: severityCounts, recommendations: [], learningApplied: false, subdomains: discoveredSubdomains, targetTree, openPorts, detectedTech
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
       // ══════════ PHASE 12: HEADER INJECTION ══════════
       phaseStart = Date.now();
       await emitProgress('header_injection', 12, 69, 'Testing Host header, X-Forwarded-For, Referer injection...');
