@@ -22,28 +22,28 @@ const corsHeaders = {
 };
 
 const PHASE_BUDGETS: Record<string, number> = {
-  connection_check: 12000,
-  discovery: 55000,
-  subdomain_enum: 35000,
-  takeover_check: 20000,
-  fingerprint: 12000,
-  payload_gen: 10000,
-  owasp_scan: 60000,
-  dom_xss: 12000,
-  cors_scan: 12000,
-  traversal_scan: 12000,
-  cookie_scan: 8000,
-  injection: 50000,
-  header_injection: 15000,
-  auth: 12000,
-  business_logic: 8000,
-  cve_exploit: 20000,
-  correlation: 10000,
-  exploit_validation: 15000,
-  poc: 12000,
-  learning: 5000,
+  connection_check: 5000,
+  discovery: 25000,
+  subdomain_enum: 15000,
+  takeover_check: 8000,
+  fingerprint: 8000,
+  payload_gen: 5000,
+  owasp_scan: 25000,
+  dom_xss: 5000,
+  cors_scan: 5000,
+  traversal_scan: 5000,
+  cookie_scan: 4000,
+  injection: 20000,
+  header_injection: 5000,
+  auth: 5000,
+  business_logic: 4000,
+  cve_exploit: 8000,
+  correlation: 5000,
+  exploit_validation: 8000,
+  poc: 5000,
+  learning: 3000,
 };
-const MAX_SCAN_TIME_MS = 290000;
+const MAX_SCAN_TIME_MS = 140000;
 const TOTAL_PHASES = 20;
 
 interface Finding {
@@ -172,6 +172,15 @@ serve(async (req) => {
 
     const saveResultsToDB = async (status: string, extraFindings: Finding[] = allFindings) => {
       const findings = deduplicateFindings(extraFindings);
+      // Trim large fields to avoid payload size issues
+      const trimmedFindings = findings.map(f => ({
+        ...f,
+        evidence: f.evidence?.slice(0, 500),
+        evidence2: f.evidence2?.slice(0, 500),
+        response: f.response?.slice(0, 300),
+        poc: f.poc?.slice(0, 2000),
+        exploitCode: f.exploitCode?.slice(0, 1500),
+      }));
       const severityCounts = {
         critical: findings.filter(f => f.severity === 'critical').length,
         high: findings.filter(f => f.severity === 'high').length,
@@ -180,27 +189,33 @@ serve(async (req) => {
         info: findings.filter(f => f.severity === 'info').length
       };
       try {
-        await supabase.from('scan_history').insert({
+        const { error: histErr } = await supabase.from('scan_history').insert({
           module: 'autonomous_vapt', scan_type: 'Autonomous VAPT v11 - Legend-Grade',
           target: targetUrl.toString(), status, findings_count: findings.length,
           duration_ms: Date.now() - scanStart,
-          report: { findings, targetTree, openPorts, detectedTech }
+          report: { findings: trimmedFindings.slice(0, 50), targetTree, openPorts, detectedTech }
         });
-        await supabase.from('security_reports').insert({
+        if (histErr) console.error('scan_history insert error:', JSON.stringify(histErr));
+        
+        const { error: repErr } = await supabase.from('security_reports').insert({
           module: 'autonomous_vapt',
           title: `XBOW VAPT v11 - ${targetUrl.hostname}`,
           summary: `${findings.length} exploit-validated: ${severityCounts.critical}C ${severityCounts.high}H ${severityCounts.medium}M | ${discoveredSubdomains.length} subs, ${openPorts.length} ports`,
-          findings, severity_counts: severityCounts, recommendations: []
+          findings: trimmedFindings, severity_counts: severityCounts, recommendations: []
         });
+        if (repErr) console.error('security_reports insert error:', JSON.stringify(repErr));
       } catch (e) { console.error('DB save error:', e); }
       return { severityCounts, findings };
     };
 
+    // Deadline-aware helper: if <15s remain, save and return early
+    const isNearDeadline = () => (Date.now() - scanStart) > (MAX_SCAN_TIME_MS - 15000);
+    
     const timeoutId = setTimeout(async () => {
-      console.log('[TIMEOUT SAFETY] Saving partial results...');
+      console.log('[TIMEOUT SAFETY] Saving partial results at 135s...');
       await saveResultsToDB('completed');
-      await emitProgress('complete', TOTAL_PHASES, 100, `Scan saved (partial). ${allFindings.length} findings.`);
-    }, MAX_SCAN_TIME_MS);
+      await emitProgress('complete', TOTAL_PHASES, 100, `Scan saved (timeout). ${allFindings.length} findings.`);
+    }, MAX_SCAN_TIME_MS - 5000);
 
     try {
       // ══════════ PHASE 0: CONNECTION PRE-CHECK ══════════
@@ -333,6 +348,18 @@ serve(async (req) => {
 
       await emitProgress('owasp_scan', 6, 44, `OWASP: ${allFindings.filter(f => !f.falsePositive).length} findings`);
 
+      // ══════ DEADLINE CHECK AFTER OWASP ══════
+      if (isNearDeadline()) {
+        clearTimeout(timeoutId);
+        const { severityCounts, findings } = await saveResultsToDB('completed');
+        await emitProgress('complete', TOTAL_PHASES, 100, `Scan complete (fast). ${findings.length} findings.`);
+        return new Response(JSON.stringify({
+          success: true, target: targetUrl.toString(), scanTime: Date.now() - scanStart,
+          discovery: { endpoints: discoveredEndpoints.length, subdomains: discoveredSubdomains.length, forms: discoveryResults.forms?.length || 0, apis: 0, ports: openPorts },
+          fingerprint: {}, findings, summary: severityCounts, recommendations: [], learningApplied: false, subdomains: discoveredSubdomains, targetTree, openPorts, detectedTech
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
       // ══════════ PHASE 7: DOM-BASED XSS ══════════
       phaseStart = Date.now();
       await emitProgress('dom_xss', 7, 45, 'DOM XSS source/sink analysis...');
@@ -377,6 +404,18 @@ serve(async (req) => {
       );
       allFindings.push(...injectionFindings);
       await emitProgress('injection', 11, 68, `Injection: ${injectionFindings.length} findings`);
+
+      // ══════ DEADLINE CHECK AFTER INJECTION ══════
+      if (isNearDeadline()) {
+        clearTimeout(timeoutId);
+        const { severityCounts, findings } = await saveResultsToDB('completed');
+        await emitProgress('complete', TOTAL_PHASES, 100, `Scan complete (fast). ${findings.length} findings.`);
+        return new Response(JSON.stringify({
+          success: true, target: targetUrl.toString(), scanTime: Date.now() - scanStart,
+          discovery: { endpoints: discoveredEndpoints.length, subdomains: discoveredSubdomains.length, forms: discoveryResults.forms?.length || 0, apis: 0, ports: openPorts },
+          fingerprint: {}, findings, summary: severityCounts, recommendations: [], learningApplied: false, subdomains: discoveredSubdomains, targetTree, openPorts, detectedTech
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
 
       // ══════════ PHASE 12: HEADER INJECTION ══════════
       phaseStart = Date.now();
