@@ -623,6 +623,22 @@ export const UnifiedVAPTDashboard = () => {
             </div>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-1 bg-muted/50 rounded-lg p-1">
+              <Button
+                variant={mainTab === "scanner" ? "default" : "ghost"}
+                size="sm" className="text-xs h-7 px-3"
+                onClick={() => setMainTab("scanner")}
+              >
+                <Radar className="h-3 w-3 mr-1" /> Scanner
+              </Button>
+              <Button
+                variant={mainTab === "history" ? "default" : "ghost"}
+                size="sm" className="text-xs h-7 px-3"
+                onClick={() => setMainTab("history")}
+              >
+                <Layers className="h-3 w-3 mr-1" /> Scan History
+              </Button>
+            </div>
             <Badge variant="outline" className="gap-1 px-3 py-1"><Brain className="h-4 w-4" />{learningStats.learningPoints} Learning Points</Badge>
             <Badge variant="outline" className="gap-1 px-3 py-1"><TrendingUp className="h-4 w-4" />{learningStats.accuracy}% Accuracy</Badge>
             {learningStats.falsePositives > 0 && (
