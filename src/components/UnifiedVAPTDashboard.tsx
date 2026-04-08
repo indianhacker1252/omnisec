@@ -26,6 +26,8 @@ import { FindingDetailModal } from "@/components/FindingDetailModal";
 import { FindingVerificationPanel } from "@/components/FindingVerificationPanel";
 import { TargetTreeVisualization } from "@/components/TargetTreeVisualization";
 import { MutationMatrix } from "@/components/MutationMatrix";
+import { ScanHistoryViewer } from "@/components/ScanHistoryViewer";
+import { useBackgroundScan } from "@/context/BackgroundScanContext";
 import {
   Brain, Zap, Target, Shield, Globe, Play, RefreshCw, AlertTriangle,
   CheckCircle, TrendingUp, Activity, Eye, ThumbsUp, ThumbsDown,
@@ -117,6 +119,8 @@ const PHASE_LABELS: Record<string, string> = {
 
 export const UnifiedVAPTDashboard = () => {
   const { toast } = useToast();
+  const { setActiveScan, updateScanProgress, addCompletedScan } = useBackgroundScan();
+  const [mainTab, setMainTab] = useState<"scanner" | "history">("scanner");
 
   const [target, setTarget] = useState("");
   const [isScanning, setIsScanning] = useState(false);
@@ -273,6 +277,14 @@ export const UnifiedVAPTDashboard = () => {
       else if (data.message?.includes("❌")) setConnectionStatus("failed");
     }
 
+    // Sync to background context
+    updateScanProgress({
+      progress: actualProgress,
+      phase: phaseLabel,
+      findings: data.findings_so_far || 0,
+      endpoints: data.endpoints_discovered || 0,
+    });
+
     const timestamp = data.created_at ? new Date(data.created_at).toLocaleTimeString() : new Date().toLocaleTimeString();
     const logEntry: LiveLogEntry = {
       timestamp,
@@ -292,9 +304,10 @@ export const UnifiedVAPTDashboard = () => {
 
     if ((data.phase === "complete" || actualProgress >= 100) && data.scan_id && completionResolverRef.current !== data.scan_id) {
       completionResolverRef.current = data.scan_id;
+      addCompletedScan(data.scan_id);
       void loadScanResultById(data.scan_id, target);
     }
-  }, [activeScanId, loadScanResultById, target]);
+  }, [activeScanId, loadScanResultById, target, updateScanProgress, addCompletedScan]);
 
   const restoreRunningScan = useCallback(async (preferredTarget?: string) => {
     try {
@@ -396,6 +409,18 @@ export const UnifiedVAPTDashboard = () => {
         body: { target, action: "full_scan", modules: ["all"], maxDepth, enableLearning, retryWithAI, generatePOC },
       });
 
+      // Register with background scan context so it persists across route changes
+      setActiveScan({
+        scanId: "",
+        target: target.replace(/^https?:\/\//, "").split("/")[0],
+        progress: 5,
+        phase: "Initializing...",
+        findings: 0,
+        endpoints: 0,
+        status: "running",
+        startedAt: new Date(),
+      });
+
       if (response.error) {
         const resumed = await restoreRunningScan(target);
         if (resumed) {
@@ -406,7 +431,10 @@ export const UnifiedVAPTDashboard = () => {
       }
 
       const result = response.data as ScanResult;
-      if (result.scanId) setActiveScanId(result.scanId);
+      if (result.scanId) {
+        setActiveScanId(result.scanId);
+        updateScanProgress({ scanId: result.scanId });
+      }
       if (result.connectionFailed) {
         setConnectionStatus("failed");
         toast({ title: "Connection Failed", description: `${target} is unreachable`, variant: "destructive" });
@@ -420,6 +448,8 @@ export const UnifiedVAPTDashboard = () => {
       setCurrentPhase("✅ Scan complete!");
       setConnectionStatus("ok");
       setIsScanning(false);
+      if (result.scanId) addCompletedScan(result.scanId);
+      setActiveScan(null);
       await loadLearningStats();
       toast({ title: "VAPT Complete", description: `${result.findings?.length || 0} findings | ${result.discovery?.subdomains || 0} subdomains | ${result.openPorts?.length || 0} ports` });
     } catch (error: any) {
@@ -595,6 +625,22 @@ export const UnifiedVAPTDashboard = () => {
             </div>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-1 bg-muted/50 rounded-lg p-1">
+              <Button
+                variant={mainTab === "scanner" ? "default" : "ghost"}
+                size="sm" className="text-xs h-7 px-3"
+                onClick={() => setMainTab("scanner")}
+              >
+                <Radar className="h-3 w-3 mr-1" /> Scanner
+              </Button>
+              <Button
+                variant={mainTab === "history" ? "default" : "ghost"}
+                size="sm" className="text-xs h-7 px-3"
+                onClick={() => setMainTab("history")}
+              >
+                <Layers className="h-3 w-3 mr-1" /> Scan History
+              </Button>
+            </div>
             <Badge variant="outline" className="gap-1 px-3 py-1"><Brain className="h-4 w-4" />{learningStats.learningPoints} Learning Points</Badge>
             <Badge variant="outline" className="gap-1 px-3 py-1"><TrendingUp className="h-4 w-4" />{learningStats.accuracy}% Accuracy</Badge>
             {learningStats.falsePositives > 0 && (
@@ -670,6 +716,12 @@ export const UnifiedVAPTDashboard = () => {
           </div>
         )}
       </Card>
+
+      {/* Scan History Tab */}
+      {mainTab === "history" && <ScanHistoryViewer />}
+
+      {/* Scanner Tab Content */}
+      {mainTab === "scanner" && <>
 
       {/* Mutation Matrix */}
       {(isScanning || liveLogs.some(l => l.message?.includes('🧬'))) && (
@@ -926,6 +978,7 @@ export const UnifiedVAPTDashboard = () => {
           AI learns from every scan. Use 👍/👎 on findings to train the model. The AI chatbox lets you correct reasoning in real-time to reduce false positives.
         </p>
       </Card>
+      </>}
     </div>
   );
 };

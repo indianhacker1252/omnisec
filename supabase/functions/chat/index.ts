@@ -133,6 +133,20 @@ const EDGE_FUNCTION_TOOLS = [
   {
     type: "function",
     function: {
+      name: "run_threat_intel",
+      description: "Fetch latest CVEs from NVD, GitHub advisories, and HackerOne hacktivity patterns for specific technologies.",
+      parameters: {
+        type: "object",
+        properties: {
+          technologies: { type: "array", items: { type: "string" }, description: "Technologies to research (e.g. ['Apache', 'PHP', 'MySQL'])" },
+        },
+        required: ["technologies"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "save_chat_history",
       description: "Save the current chat conversation for future reference.",
       parameters: {
@@ -222,6 +236,8 @@ async function executeToolCall(
         const t = args.target?.startsWith("http") ? args.target : `https://${args.target}`;
         return JSON.stringify(await invoke("endpoint-discovery", { target: t }));
       }
+      case "run_threat_intel":
+        return JSON.stringify(await invoke("threat-intel-learn", { technologies: args.technologies || [], action: "learn" }));
       case "save_chat_history":
         return JSON.stringify({ saved: true, title: args.title, note: "Chat saved by the AI. User can view it from chat history." });
       default:
