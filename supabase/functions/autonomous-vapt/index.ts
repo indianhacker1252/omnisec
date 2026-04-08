@@ -336,6 +336,18 @@ serve(async (req) => {
 
       await emitProgress('owasp_scan', 6, 44, `OWASP: ${allFindings.filter(f => !f.falsePositive).length} findings`);
 
+      // ══════ DEADLINE CHECK AFTER OWASP ══════
+      if (isNearDeadline()) {
+        clearTimeout(timeoutId);
+        const { severityCounts, findings } = await saveResultsToDB('completed');
+        await emitProgress('complete', TOTAL_PHASES, 100, `Scan complete (fast). ${findings.length} findings.`);
+        return new Response(JSON.stringify({
+          success: true, target: targetUrl.toString(), scanTime: Date.now() - scanStart,
+          discovery: { endpoints: discoveredEndpoints.length, subdomains: discoveredSubdomains.length, forms: discoveryResults.forms?.length || 0, apis: 0, ports: openPorts },
+          fingerprint: {}, findings, summary: severityCounts, recommendations: [], learningApplied: false, subdomains: discoveredSubdomains, targetTree, openPorts, detectedTech
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
       // ══════════ PHASE 7: DOM-BASED XSS ══════════
       phaseStart = Date.now();
       await emitProgress('dom_xss', 7, 45, 'DOM XSS source/sink analysis...');
