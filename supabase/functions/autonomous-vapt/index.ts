@@ -172,6 +172,15 @@ serve(async (req) => {
 
     const saveResultsToDB = async (status: string, extraFindings: Finding[] = allFindings) => {
       const findings = deduplicateFindings(extraFindings);
+      // Trim large fields to avoid payload size issues
+      const trimmedFindings = findings.map(f => ({
+        ...f,
+        evidence: f.evidence?.slice(0, 500),
+        evidence2: f.evidence2?.slice(0, 500),
+        response: f.response?.slice(0, 300),
+        poc: f.poc?.slice(0, 2000),
+        exploitCode: f.exploitCode?.slice(0, 1500),
+      }));
       const severityCounts = {
         critical: findings.filter(f => f.severity === 'critical').length,
         high: findings.filter(f => f.severity === 'high').length,
@@ -180,18 +189,21 @@ serve(async (req) => {
         info: findings.filter(f => f.severity === 'info').length
       };
       try {
-        await supabase.from('scan_history').insert({
+        const { error: histErr } = await supabase.from('scan_history').insert({
           module: 'autonomous_vapt', scan_type: 'Autonomous VAPT v11 - Legend-Grade',
           target: targetUrl.toString(), status, findings_count: findings.length,
           duration_ms: Date.now() - scanStart,
-          report: { findings, targetTree, openPorts, detectedTech }
+          report: { findings: trimmedFindings.slice(0, 50), targetTree, openPorts, detectedTech }
         });
-        await supabase.from('security_reports').insert({
+        if (histErr) console.error('scan_history insert error:', JSON.stringify(histErr));
+        
+        const { error: repErr } = await supabase.from('security_reports').insert({
           module: 'autonomous_vapt',
           title: `XBOW VAPT v11 - ${targetUrl.hostname}`,
           summary: `${findings.length} exploit-validated: ${severityCounts.critical}C ${severityCounts.high}H ${severityCounts.medium}M | ${discoveredSubdomains.length} subs, ${openPorts.length} ports`,
-          findings, severity_counts: severityCounts, recommendations: []
+          findings: trimmedFindings, severity_counts: severityCounts, recommendations: []
         });
+        if (repErr) console.error('security_reports insert error:', JSON.stringify(repErr));
       } catch (e) { console.error('DB save error:', e); }
       return { severityCounts, findings };
     };
