@@ -277,6 +277,14 @@ export const UnifiedVAPTDashboard = () => {
       else if (data.message?.includes("❌")) setConnectionStatus("failed");
     }
 
+    // Sync to background context
+    updateScanProgress({
+      progress: actualProgress,
+      phase: phaseLabel,
+      findings: data.findings_so_far || 0,
+      endpoints: data.endpoints_discovered || 0,
+    });
+
     const timestamp = data.created_at ? new Date(data.created_at).toLocaleTimeString() : new Date().toLocaleTimeString();
     const logEntry: LiveLogEntry = {
       timestamp,
@@ -296,9 +304,10 @@ export const UnifiedVAPTDashboard = () => {
 
     if ((data.phase === "complete" || actualProgress >= 100) && data.scan_id && completionResolverRef.current !== data.scan_id) {
       completionResolverRef.current = data.scan_id;
+      addCompletedScan(data.scan_id);
       void loadScanResultById(data.scan_id, target);
     }
-  }, [activeScanId, loadScanResultById, target]);
+  }, [activeScanId, loadScanResultById, target, updateScanProgress, addCompletedScan]);
 
   const restoreRunningScan = useCallback(async (preferredTarget?: string) => {
     try {
