@@ -57,9 +57,11 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
+      <BackgroundScanProvider>
       <Toaster />
       <Sonner />
       <BrowserRouter>
+        <BackgroundScanIndicator />
         <Routes>
           <Route path="/auth" element={<Auth />} />
           <Route
@@ -209,6 +211,7 @@ const App = () => (
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
+      </BackgroundScanProvider>
     </TooltipProvider>
   </QueryClientProvider>
 );
