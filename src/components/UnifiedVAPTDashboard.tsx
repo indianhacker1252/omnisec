@@ -448,6 +448,8 @@ export const UnifiedVAPTDashboard = () => {
       setCurrentPhase("✅ Scan complete!");
       setConnectionStatus("ok");
       setIsScanning(false);
+      if (result.scanId) addCompletedScan(result.scanId);
+      setActiveScan(null);
       await loadLearningStats();
       toast({ title: "VAPT Complete", description: `${result.findings?.length || 0} findings | ${result.discovery?.subdomains || 0} subdomains | ${result.openPorts?.length || 0} ports` });
     } catch (error: any) {
