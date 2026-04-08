@@ -196,11 +196,14 @@ serve(async (req) => {
       return { severityCounts, findings };
     };
 
+    // Deadline-aware helper: if <15s remain, save and return early
+    const isNearDeadline = () => (Date.now() - scanStart) > (MAX_SCAN_TIME_MS - 15000);
+    
     const timeoutId = setTimeout(async () => {
-      console.log('[TIMEOUT SAFETY] Saving partial results...');
+      console.log('[TIMEOUT SAFETY] Saving partial results at 135s...');
       await saveResultsToDB('completed');
-      await emitProgress('complete', TOTAL_PHASES, 100, `Scan saved (partial). ${allFindings.length} findings.`);
-    }, MAX_SCAN_TIME_MS);
+      await emitProgress('complete', TOTAL_PHASES, 100, `Scan saved (timeout). ${allFindings.length} findings.`);
+    }, MAX_SCAN_TIME_MS - 5000);
 
     try {
       // ══════════ PHASE 0: CONNECTION PRE-CHECK ══════════
