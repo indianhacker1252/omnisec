@@ -236,6 +236,8 @@ async function executeToolCall(
         const t = args.target?.startsWith("http") ? args.target : `https://${args.target}`;
         return JSON.stringify(await invoke("endpoint-discovery", { target: t }));
       }
+      case "run_threat_intel":
+        return JSON.stringify(await invoke("threat-intel-learn", { technologies: args.technologies || [], action: "learn" }));
       case "save_chat_history":
         return JSON.stringify({ saved: true, title: args.title, note: "Chat saved by the AI. User can view it from chat history." });
       default:
