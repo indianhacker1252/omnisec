@@ -128,7 +128,12 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     const body = await req.json();
-    const { target, maxDepth = 3, enableLearning = true, generatePOC = true } = body;
+    const { target, maxDepth = 3, enableLearning = true, generatePOC = true, pass = 1 } = body;
+
+    // ═══ PASS 2: CONTINUATION — receives findings from pass 1 for deep validation ═══
+    if (pass === 2 && body.action === "continue_scan") {
+      return await handlePass2(body, supabase, user, LOVABLE_API_KEY);
+    }
 
     if (!target) {
       return new Response(JSON.stringify({ error: "Target is required" }),
