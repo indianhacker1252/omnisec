@@ -2,18 +2,15 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 /**
- * OmniSec™ Autonomous VAPT Engine v11.0 — XBOW Legend-Grade
+ * OmniSec™ Autonomous VAPT Engine v12.0 — Multi-Pass XBOW Legend-Grade
  * 
- * Key upgrades from v10:
- * - 3-level recursive crawling + JS endpoint mining (regex API routes from .js files)
- * - ALL params from ALL discovered pages tested (not just common names)
- * - POST body injection for every form, not just GET
- * - Header injection testing (Host, X-Forwarded-For, Referer)
- * - Expanded phase budgets (300s max, smarter allocation)
- * - HackerOne hacktivity pattern learning
- * - Auto CVE correlation with extracted tech versions
- * - Full exploitation proof in POC (actual request/response captured)
- * - Smarter time-based SQLi with statistical timing analysis
+ * v12 upgrades:
+ * - MULTI-PASS: Pass 1 (discovery+testing ~140s) + Pass 2 (validation+CVE+POC ~140s)
+ * - Context-aware XSS with HTML context analysis
+ * - Enhanced SSRF response body analysis for cloud metadata
+ * - Deeper JS param extraction
+ * - Auto threat-intel at scan start
+ * - Pass 2 receives pass 1 findings for deeper validation + exploit + POC
  */
 
 const corsHeaders = {
