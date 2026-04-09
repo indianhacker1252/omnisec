@@ -488,13 +488,20 @@ serve(async (req) => {
       await emitAIThought(`Legend-Grade scan complete! ${findings.length} exploit-validated findings. ${findings.filter(f => f.exploitValidated).length} deterministically confirmed.`, 'complete', TOTAL_PHASES);
       await emitProgress('complete', TOTAL_PHASES, 100, `Scan complete! ${findings.length} exploit-validated findings.`);
 
+      // In multi-pass mode (pass=1), return partial findings for pass 2
+      const isPass1 = (pass === 1);
       return new Response(JSON.stringify({
         success: true, target: targetUrl.toString(), scanTime: Date.now() - scanStart,
+        scanId,
         discovery: {
           endpoints: discoveredEndpoints.length, subdomains: subdomains.length,
-          forms: discoveryResults.forms?.length || 0, apis: discoveryResults.apiEndpoints?.length || 0, ports: openPorts
+          forms: discoveryResults.forms?.length || 0, apis: discoveryResults.apiEndpoints?.length || 0, ports: openPorts,
+          endpointsList: discoveredEndpoints.slice(0, 150),
+          formsList: discoveryResults.forms?.slice(0, 50) || [],
+          paramsList: discoveryResults.params?.slice(0, 200) || [],
         },
         fingerprint, findings: verifiedFindings,
+        partialFindings: isPass1 ? verifiedFindings : undefined,
         attackPaths: correlationResult.attackPaths, chainedExploits: correlationResult.chainedExploits,
         summary: severityCounts, recommendations: correlationResult.recommendations,
         learningApplied: enableLearning, subdomains, targetTree, latestCVEs: latestCVEs.slice(0, 20),
