@@ -47,6 +47,13 @@ const API_KEYS: ApiKeyConfig[] = [
     placeholder: "Enter your OpenAI API key",
     required: false,
   },
+  {
+    key: "BROWSERLESS_API_KEY",
+    label: "Browserless API Key",
+    description: "Optional - Enables headless browser scanning (DOM XSS, SPA crawling, screenshot POCs). Get a free key at browserless.io. When empty, scanner runs HTTP-only.",
+    placeholder: "Enter your Browserless.io API key",
+    required: false,
+  },
 ];
 
 const Settings = () => {
