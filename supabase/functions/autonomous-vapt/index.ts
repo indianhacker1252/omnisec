@@ -488,6 +488,18 @@ serve(async (req) => {
       await emitAIThought(`Legend-Grade scan complete! ${findings.length} exploit-validated findings. ${findings.filter(f => f.exploitValidated).length} deterministically confirmed.`, 'complete', TOTAL_PHASES);
       await emitProgress('complete', TOTAL_PHASES, 100, `Scan complete! ${findings.length} exploit-validated findings.`);
 
+      // ═══ MULTI-PASS CHAIN: insert Pass 1 as completed → DB trigger fires Pass 2..6 in background ═══
+      try {
+        await supabase.from('scan_passes').insert({
+          scan_id: scanId, pass_number: 1, pass_name: 'recon_initial', status: 'pending',
+          target: targetUrl.toString(), findings_count: findings.length,
+          payload: { endpoints: discoveredEndpoints.slice(0, 100), subdomains: discoveredSubdomains.slice(0, 50), tech: detectedTech, partialFindings: verifiedFindings.slice(0, 30) }
+        });
+        await supabase.from('scan_passes').update({ status: 'completed', completed_at: new Date().toISOString() })
+          .eq('scan_id', scanId).eq('pass_number', 1);
+        console.log(`[CHAIN] Pass 1 marked completed for ${scanId}, trigger will fire Pass 2..6`);
+      } catch (e) { console.error('[CHAIN] kickoff error:', e); }
+
       // In multi-pass mode (pass=1), return partial findings for pass 2
       const isPass1 = (pass === 1);
       return new Response(JSON.stringify({
