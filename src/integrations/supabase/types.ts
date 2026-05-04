@@ -149,6 +149,75 @@ export type Database = {
         }
         Relationships: []
       }
+      scan_auth_sessions: {
+        Row: {
+          bearer_token: string | null
+          cookies: Json | null
+          created_at: string
+          custom_headers: Json | null
+          id: string
+          scan_id: string
+          user_id_observed: string | null
+          user_label: string
+        }
+        Insert: {
+          bearer_token?: string | null
+          cookies?: Json | null
+          created_at?: string
+          custom_headers?: Json | null
+          id?: string
+          scan_id: string
+          user_id_observed?: string | null
+          user_label?: string
+        }
+        Update: {
+          bearer_token?: string | null
+          cookies?: Json | null
+          created_at?: string
+          custom_headers?: Json | null
+          id?: string
+          scan_id?: string
+          user_id_observed?: string | null
+          user_label?: string
+        }
+        Relationships: []
+      }
+      scan_canaries: {
+        Row: {
+          canary_token: string
+          id: string
+          injected_at: string
+          injected_param: string | null
+          injected_url: string
+          reflected_at: string | null
+          reflected_url: string | null
+          scan_id: string
+          status: string
+        }
+        Insert: {
+          canary_token: string
+          id?: string
+          injected_at?: string
+          injected_param?: string | null
+          injected_url: string
+          reflected_at?: string | null
+          reflected_url?: string | null
+          scan_id: string
+          status?: string
+        }
+        Update: {
+          canary_token?: string
+          id?: string
+          injected_at?: string
+          injected_param?: string | null
+          injected_url?: string
+          reflected_at?: string | null
+          reflected_url?: string | null
+          scan_id?: string
+          status?: string
+        }
+        Relationships: []
+      }
       scan_history: {
         Row: {
           completed_at: string | null
@@ -188,6 +257,51 @@ export type Database = {
           started_at?: string
           status?: string
           target?: string | null
+        }
+        Relationships: []
+      }
+      scan_passes: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          error_message: string | null
+          findings_count: number | null
+          id: string
+          pass_name: string
+          pass_number: number
+          payload: Json | null
+          scan_id: string
+          started_at: string | null
+          status: string
+          target: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          findings_count?: number | null
+          id?: string
+          pass_name: string
+          pass_number: number
+          payload?: Json | null
+          scan_id: string
+          started_at?: string | null
+          status?: string
+          target: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          findings_count?: number | null
+          id?: string
+          pass_name?: string
+          pass_number?: number
+          payload?: Json | null
+          scan_id?: string
+          started_at?: string | null
+          status?: string
+          target?: string
         }
         Relationships: []
       }
@@ -482,6 +596,51 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      vapt_templates: {
+        Row: {
+          category: string
+          created_at: string
+          cve_ids: string[] | null
+          description: string | null
+          enabled: boolean | null
+          id: string
+          matchers: Json
+          name: string
+          request: Json
+          severity: string
+          tags: string[] | null
+          template_id: string
+        }
+        Insert: {
+          category: string
+          created_at?: string
+          cve_ids?: string[] | null
+          description?: string | null
+          enabled?: boolean | null
+          id?: string
+          matchers: Json
+          name: string
+          request: Json
+          severity?: string
+          tags?: string[] | null
+          template_id: string
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          cve_ids?: string[] | null
+          description?: string | null
+          enabled?: boolean | null
+          id?: string
+          matchers?: Json
+          name?: string
+          request?: Json
+          severity?: string
+          tags?: string[] | null
+          template_id?: string
+        }
+        Relationships: []
       }
       vapt_test_actions: {
         Row: {

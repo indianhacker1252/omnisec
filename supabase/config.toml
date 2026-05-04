@@ -77,3 +77,12 @@ verify_jwt = false
 
 [functions.recon-orchestrator]
 verify_jwt = false
+
+[functions.vapt-advanced]
+verify_jwt = false
+
+[functions.vapt-intel]
+verify_jwt = false
+
+[functions.threat-intel-learn]
+verify_jwt = false
