@@ -511,47 +511,52 @@ ${verificationResult ? `\nVerification Request:\n${verificationResult.request}\n
 }
 
 function generateLocalPOC(finding: any, verificationResult: any): string {
+  const verdict = verificationResult?.confirmed
+    ? "✅ **CONFIRMED — exploit oracle triggered**"
+    : "⚠️ Not confirmed by automated oracle (manual review required)";
+  const stepsList = (verificationResult?.reproductionSteps || []).map((s: string, i: number) => `${i+1}. ${s}`).join("\n");
   return `# Bug Bounty Report — ${finding.title}
 
 ## Summary
 | Field | Value |
 |-------|-------|
 | **Vulnerability** | ${finding.title} |
+| **Verification** | ${verdict} |
 | **Severity** | ${(finding.severity || "medium").toUpperCase()} |
 | **CWE** | ${finding.cwe || "N/A"} |
 | **CVSS** | ${finding.cvss || "N/A"} |
 | **Endpoint** | \`${finding.endpoint}\` |
 | **Method** | ${finding.method || "GET"} |
+| **Probes run** | ${verificationResult?.probes ?? 0} |
 
 ## Description
 ${finding.description || "N/A"}
 
-## Steps to Reproduce
-1. Open a terminal
-2. Run the following curl command:
+## Reproduction Methodology
+${stepsList || "1. Replay the request shown below.\n2. Inspect the response for the documented evidence."}
+
+## Curl Reproduction
 \`\`\`bash
-curl -v -X ${finding.method || "GET"} "${finding.endpoint}" ${finding.payload ? `-d "${finding.payload}"` : ""}
+curl -i -X ${finding.method || "GET"} "${finding.endpoint}" ${finding.payload ? `--data-urlencode "${finding.payload}"` : ""}
 \`\`\`
-3. Observe the response for vulnerability indicators
 
-## Evidence
-
-### Request
+## Verification Probes — Requests
 \`\`\`
 ${verificationResult?.request || `${finding.method || "GET"} ${finding.endpoint}`}
 \`\`\`
 
-### Response
+## Verification Probes — Responses
 \`\`\`
-${verificationResult?.response?.slice(0, 2000) || finding.evidence || "See description"}
+${verificationResult?.response?.slice(0, 4000) || finding.evidence || "See description"}
 \`\`\`
 
-${finding.evidence2 ? `### Secondary Verification\n${finding.evidence2}` : ""}
+## Oracle Analysis
+${verificationResult?.analysis || "No analysis available."}
 
 ## Impact
 ${finding.severity === "critical" || finding.severity === "high"
-    ? "This vulnerability poses a significant risk and could lead to unauthorized data access, system compromise, or service disruption."
-    : "This vulnerability should be remediated to prevent potential security issues."}
+    ? "An attacker can leverage this issue to gain unauthorized data access, execute code, or disrupt service. See CWE for the canonical impact chain."
+    : "This issue weakens the security posture and should be fixed."}
 
 ## Remediation
 ${finding.remediation || "Apply appropriate security controls."}
