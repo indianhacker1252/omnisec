@@ -34,7 +34,7 @@ serve(async (req) => {
     }
 
     if (action === "run_verification") {
-      const result = await runVerification(finding, script);
+      const result = await runVerification(finding, script, user.id, authClient);
       return new Response(JSON.stringify(result), {
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
