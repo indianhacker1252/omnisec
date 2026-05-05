@@ -170,39 +170,91 @@ interface Probe {
   bodyHash: string;
 }
 
-async function httpProbe(url: string, method: string, label: string, step: number, body?: string, extraHeaders?: Record<string,string>): Promise<Probe | null> {
+// ── Retry/backoff state shared per verification run
+interface RetryStats {
+  total: number;
+  retried: number;
+  failures5xx: number;
+  timeouts: number;
+  giveUps: number;
+  lastErrors: string[];
+}
+
+async function httpProbe(
+  url: string,
+  method: string,
+  label: string,
+  step: number,
+  body?: string,
+  extraHeaders?: Record<string,string>,
+  retryStats?: RetryStats,
+): Promise<Probe | null> {
+  if (retryStats) retryStats.total++;
+  const MAX_ATTEMPTS = 3;
+  const BASE_DELAY = 700; // ms — exponential backoff base
+  let lastErr = "";
+
   try {
     const u = new URL(url);
     if (isPrivateHost(u.hostname)) {
       return { step, label: `${label} [BLOCKED private host]`, request: `${method} ${url}`, status: 0, responseTime: 0, bodySnippet: "blocked", headers: {}, bodyLen: 0, bodyHash: "0" };
     }
-    const start = Date.now();
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 12000);
-    const resp = await fetch(url, {
-      method,
-      headers: { "User-Agent": "OmniSec-Verifier/2.0 (+exploit-engine)", "Accept": "*/*", ...(extraHeaders || {}) },
-      body: body && method !== "GET" && method !== "HEAD" ? body : undefined,
-      redirect: "manual",
-      signal: ctrl.signal,
-    });
-    clearTimeout(t);
-    const rt = Date.now() - start;
-    const text = await resp.text().catch(() => "");
-    const hdrs = Object.fromEntries(resp.headers.entries());
-    let h = 0; for (let i = 0; i < text.length; i++) { h = ((h << 5) - h) + text.charCodeAt(i); h = h & h; }
-    return {
-      step, label,
-      request: `${method} ${url}\nUser-Agent: OmniSec-Verifier/2.0`,
-      status: resp.status, responseTime: rt,
-      bodySnippet: text.slice(0, 1500),
-      headers: hdrs,
-      bodyLen: text.length,
-      bodyHash: Math.abs(h).toString(36),
-    };
-  } catch (e: any) {
-    return { step, label: `${label} [ERROR: ${e.message}]`, request: `${method} ${url}`, status: 0, responseTime: 0, bodySnippet: e.message, headers: {}, bodyLen: 0, bodyHash: "0" };
+  } catch {
+    return { step, label: `${label} [INVALID URL]`, request: `${method} ${url}`, status: 0, responseTime: 0, bodySnippet: "invalid url", headers: {}, bodyLen: 0, bodyHash: "0" };
   }
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const start = Date.now();
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 12000);
+      const resp = await fetch(url, {
+        method,
+        headers: { "User-Agent": "OmniSec-Verifier/2.0 (+exploit-engine)", "Accept": "*/*", ...(extraHeaders || {}) },
+        body: body && method !== "GET" && method !== "HEAD" ? body : undefined,
+        redirect: "manual",
+        signal: ctrl.signal,
+      });
+      clearTimeout(t);
+      const rt = Date.now() - start;
+      const text = await resp.text().catch(() => "");
+      const hdrs = Object.fromEntries(resp.headers.entries());
+
+      // Retry on 5xx
+      if (resp.status >= 500 && resp.status < 600 && attempt < MAX_ATTEMPTS) {
+        if (retryStats) { retryStats.retried++; retryStats.failures5xx++; retryStats.lastErrors.push(`${label}: HTTP ${resp.status} (attempt ${attempt})`); }
+        await new Promise(r => setTimeout(r, BASE_DELAY * Math.pow(2, attempt - 1)));
+        continue;
+      }
+      if (resp.status >= 500 && retryStats) { retryStats.failures5xx++; retryStats.giveUps++; }
+
+      let h = 0; for (let i = 0; i < text.length; i++) { h = ((h << 5) - h) + text.charCodeAt(i); h = h & h; }
+      return {
+        step, label: attempt > 1 ? `${label} [retry x${attempt-1}]` : label,
+        request: `${method} ${url}\nUser-Agent: OmniSec-Verifier/2.0`,
+        status: resp.status, responseTime: rt,
+        bodySnippet: text.slice(0, 1500),
+        headers: hdrs,
+        bodyLen: text.length,
+        bodyHash: Math.abs(h).toString(36),
+      };
+    } catch (e: any) {
+      lastErr = e.message || String(e);
+      const isTimeout = /abort|timeout/i.test(lastErr);
+      if (retryStats) {
+        if (isTimeout) retryStats.timeouts++;
+        retryStats.lastErrors.push(`${label}: ${lastErr} (attempt ${attempt})`);
+      }
+      if (attempt < MAX_ATTEMPTS) {
+        if (retryStats) retryStats.retried++;
+        await new Promise(r => setTimeout(r, BASE_DELAY * Math.pow(2, attempt - 1)));
+        continue;
+      }
+      if (retryStats) retryStats.giveUps++;
+      return { step, label: `${label} [ERROR after ${MAX_ATTEMPTS} attempts: ${lastErr}]`, request: `${method} ${url}`, status: 0, responseTime: 0, bodySnippet: lastErr, headers: {}, bodyLen: 0, bodyHash: "0" };
+    }
+  }
+  return null;
 }
 
 function injectParam(url: string, value: string, paramName?: string): string {
