@@ -494,7 +494,7 @@ Evidence: ${finding.evidence || "N/A"}
 Secondary Evidence: ${finding.evidence2 || "N/A"}
 Remediation: ${finding.remediation}
 Category: ${finding.category || "N/A"}
-${verificationResult ? `\nVerification Request:\n${verificationResult.request}\n\nVerification Response:\n${verificationResult.response?.slice(0, 2000)}\n\nVerification Analysis: ${verificationResult.analysis}` : ""}`
+${verificationResult ? `\nAutomated Verification Verdict: ${verificationResult.confirmed ? "CONFIRMED" : "NOT CONFIRMED"}\nProbes run: ${verificationResult.probes ?? 0}\nReproduction steps already executed:\n${(verificationResult.reproductionSteps || []).join("\n")}\n\nProbe Requests:\n${verificationResult.request}\n\nProbe Responses:\n${verificationResult.response?.slice(0, 3500)}\n\nOracle Analysis: ${verificationResult.analysis}\n\nWrite the report ONLY based on the data above. If verdict is NOT CONFIRMED, mark severity as Informational and explain why the oracle did not trigger.` : ""}`
           }
         ],
         max_tokens: 4000,
