@@ -44,6 +44,57 @@ export type Database = {
         }
         Relationships: []
       }
+      finding_exploit_proofs: {
+        Row: {
+          confirmed: boolean
+          created_at: string
+          created_by: string | null
+          exploit_technique: string
+          extracted_data: Json | null
+          finding_id: string | null
+          id: string
+          reproduction_steps: string | null
+          request_dump: string | null
+          response_dump: string | null
+          scan_id: string | null
+          sensitivity_level: string
+          target_host: string | null
+          vuln_class: string
+        }
+        Insert: {
+          confirmed?: boolean
+          created_at?: string
+          created_by?: string | null
+          exploit_technique: string
+          extracted_data?: Json | null
+          finding_id?: string | null
+          id?: string
+          reproduction_steps?: string | null
+          request_dump?: string | null
+          response_dump?: string | null
+          scan_id?: string | null
+          sensitivity_level?: string
+          target_host?: string | null
+          vuln_class: string
+        }
+        Update: {
+          confirmed?: boolean
+          created_at?: string
+          created_by?: string | null
+          exploit_technique?: string
+          extracted_data?: Json | null
+          finding_id?: string | null
+          id?: string
+          reproduction_steps?: string | null
+          request_dump?: string | null
+          response_dump?: string | null
+          scan_id?: string | null
+          sensitivity_level?: string
+          target_host?: string | null
+          vuln_class?: string
+        }
+        Relationships: []
+      }
       recon_findings: {
         Row: {
           confidence_score: number | null
