@@ -227,13 +227,22 @@ serve(async (req) => {
 
     // Deadline-aware helper: if <15s remain, save and return early
     const isNearDeadline = () => (Date.now() - scanStart) > (MAX_SCAN_TIME_MS - 15000);
-    
+
     const timeoutId = setTimeout(async () => {
       console.log('[TIMEOUT SAFETY] Saving partial results at 135s...');
       await saveResultsToDB('completed');
       await emitProgress('complete', TOTAL_PHASES, 100, `Scan saved (timeout). ${allFindings.length} findings.`);
     }, MAX_SCAN_TIME_MS - 5000);
 
+    // ═══ BACKGROUND EXECUTION: return scanId immediately, run scan via waitUntil ═══
+    // Avoids 150s edge runtime wall-clock cap that returned 504 to the client.
+    await emitProgress('connection_check', 0, 1, `Scan queued for ${targetUrl.hostname}...`);
+    const earlyResponse = new Response(JSON.stringify({
+      success: true, backgroundStarted: true, scanId, target: targetUrl.toString(),
+      message: "Scan running in background. Subscribe to scan_progress channel for live updates."
+    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
+    const scanWork = (async () => {
     try {
       // ══════════ PHASE 0: CONNECTION PRE-CHECK ══════════
       let phaseStart = Date.now();
@@ -540,20 +549,18 @@ serve(async (req) => {
       console.error("[SCAN PHASE ERROR]", innerError);
       await saveResultsToDB('completed');
       await emitProgress('complete', TOTAL_PHASES, 100, `Scan finished. ${allFindings.length} findings (some phases errored).`);
-      return new Response(JSON.stringify({
-        success: true, target: targetUrl.toString(), scanTime: Date.now() - scanStart,
-        discovery: { endpoints: discoveredEndpoints.length, subdomains: discoveredSubdomains.length, forms: 0, apis: 0, ports: openPorts },
-        fingerprint: {}, findings: deduplicateFindings(allFindings), attackPaths: [], chainedExploits: [],
-        summary: {
-          critical: allFindings.filter(f => f.severity === 'critical').length,
-          high: allFindings.filter(f => f.severity === 'high').length,
-          medium: allFindings.filter(f => f.severity === 'medium').length,
-          low: allFindings.filter(f => f.severity === 'low').length,
-          info: allFindings.filter(f => f.severity === 'info').length,
-        },
-        recommendations: [], learningApplied: true, subdomains: discoveredSubdomains, targetTree, openPorts, detectedTech
-      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
+    })(); // end scanWork IIFE
+
+    // @ts-ignore — EdgeRuntime is provided by Supabase Edge Runtime
+    if (typeof EdgeRuntime !== "undefined" && (EdgeRuntime as any).waitUntil) {
+      // @ts-ignore
+      EdgeRuntime.waitUntil(scanWork);
+    } else {
+      // Fallback: detach
+      scanWork.catch((e) => console.error("[SCAN BG ERROR]", e));
+    }
+    return earlyResponse;
 
   } catch (error: any) {
     console.error("[AUTONOMOUS VAPT ERROR]", error);
