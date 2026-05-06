@@ -109,10 +109,38 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    const SHODAN_API_KEY = Deno.env.get("SHODAN_API_KEY");
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const body = await req.json();
+    const {
+      target, maxDepth = 3, enableLearning = true, generatePOC = true,
+      pass = 1, continuation = false, scanId: chainScanId, passNumber, passName,
+    } = body;
+
+    // ═══ BACKGROUND CHAIN CALL (from pg_net trigger) — no user JWT, allow service-role ═══
+    if (continuation === true || body.action === "continue_scan" || passNumber) {
+      // Resolve operator from existing scan_session for downstream learning
+      let user: any = { id: null };
+      if (chainScanId) {
+        const { data: sess } = await supabase
+          .from('scan_sessions').select('operator_id').eq('id', chainScanId).maybeSingle();
+        if (sess?.operator_id) user = { id: sess.operator_id };
+      }
+      return await handlePass2(
+        { ...body, scanId: chainScanId, pass: passNumber || 2 },
+        supabase, user, LOVABLE_API_KEY
+      );
+    }
+
+    // ═══ INTERACTIVE CALL — require authenticated user ═══
     const authClient = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
+      { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } } }
     );
     const { data: { user }, error: authError } = await authClient.auth.getUser();
     if (authError || !user) {
@@ -121,19 +149,6 @@ serve(async (req) => {
       });
     }
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    const SHODAN_API_KEY = Deno.env.get("SHODAN_API_KEY");
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
-
-    const body = await req.json();
-    const { target, maxDepth = 3, enableLearning = true, generatePOC = true, pass = 1 } = body;
-
-    // ═══ PASS 2: CONTINUATION — receives findings from pass 1 for deep validation ═══
-    if (pass === 2 && body.action === "continue_scan") {
-      return await handlePass2(body, supabase, user, LOVABLE_API_KEY);
-    }
 
     if (!target) {
       return new Response(JSON.stringify({ error: "Target is required" }),
