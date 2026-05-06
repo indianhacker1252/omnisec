@@ -129,7 +129,13 @@ export const FindingVerificationPanel = ({ finding, onClose, onStatusChange }: P
       });
 
       if (data.confirmed) {
-        toast({ title: "✅ Vulnerability Confirmed!", description: "The finding has been verified. Generate a POC report." });
+        const proof = data.exploitProof;
+        toast({
+          title: "✅ Vulnerability Confirmed!",
+          description: proof?.stored
+            ? `Exploit succeeded (${proof.vulnClass} via ${proof.technique}). Sensitive proof stored for admin review only.`
+            : "The finding has been verified. Generate a POC report.",
+        });
       } else {
         toast({ title: "⚠️ Not Confirmed", description: "The test didn't reproduce the vulnerability", variant: "destructive" });
       }
