@@ -35,6 +35,48 @@ serve(async (req) => {
 
     if (action === "run_verification") {
       const result = await runVerification(finding, script, user.id, authClient);
+
+      // ── If confirmed, run the exploitation/extraction engine and persist sensitive
+      //    proof to the admin-only finding_exploit_proofs table.
+      if (result.confirmed) {
+        try {
+          const proof = await exploitAndExtract(finding);
+          const adminClient = createClient(
+            Deno.env.get("SUPABASE_URL") ?? "",
+            Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+          );
+          const { data: ins } = await adminClient.from("finding_exploit_proofs").insert({
+            finding_id: finding.id ?? null,
+            scan_id: finding.scan_id ?? finding.scanId ?? null,
+            target_host: (() => { try { return new URL(finding.endpoint).hostname; } catch { return null; } })(),
+            vuln_class: proof.vulnClass,
+            exploit_technique: proof.technique,
+            request_dump: proof.requestDump,
+            response_dump: proof.responseDump,
+            extracted_data: proof.extractedData,
+            sensitivity_level: proof.sensitivity,
+            confirmed: proof.exploited,
+            reproduction_steps: proof.reproductionSteps,
+            created_by: user.id,
+          }).select("id").maybeSingle();
+
+          // Surface only a non-sensitive summary to the requester.
+          (result as any).exploitProof = {
+            stored: !!ins?.id,
+            proofId: ins?.id ?? null,
+            vulnClass: proof.vulnClass,
+            technique: proof.technique,
+            exploited: proof.exploited,
+            sensitivity: proof.sensitivity,
+            extractedSummary: proof.summary,
+            adminOnly: true,
+            note: "Full sensitive proof (DB rows, file contents, tokens, IMDS credentials, etc.) is encrypted at rest and only visible to admins.",
+          };
+        } catch (e) {
+          console.error("[exploit-extract] failed:", e);
+        }
+      }
+
       return new Response(JSON.stringify(result), {
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
