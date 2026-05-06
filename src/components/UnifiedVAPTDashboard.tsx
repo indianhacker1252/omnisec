@@ -417,7 +417,7 @@ export const UnifiedVAPTDashboard = () => {
         startedAt: new Date(),
       });
 
-      // ═══ PASS 1: Discovery + Testing (phases 0-11) ═══
+      // ═══ PASS 1: Discovery + Testing — runs BACKGROUND on the server (returns immediately) ═══
       const pass1Response = await supabase.functions.invoke("autonomous-vapt", {
         body: { target, action: "full_scan", pass: 1, modules: ["all"], maxDepth, enableLearning, retryWithAI, generatePOC },
       });
@@ -446,52 +446,15 @@ export const UnifiedVAPTDashboard = () => {
         updateScanProgress({ scanId: pass1Result.scanId });
       }
 
-      // ═══ PASS 2: Validation + CVE + POC + Learning (phases 12-19) ═══
-      if (pass1Result.partialFindings && pass1Result.partialFindings.length > 0) {
-        setCurrentPhase("🔄 Pass 2: Deep validation + CVE exploit + POC generation...");
-        updateScanProgress({ progress: 65, phase: "Pass 2: Deep validation..." });
-
-        const pass2Response = await supabase.functions.invoke("autonomous-vapt", {
-          body: {
-            target, action: "continue_scan", pass: 2,
-            scanId: pass1Result.scanId,
-            partialFindings: pass1Result.partialFindings,
-            discoveredEndpoints: pass1Result.discovery?.endpointsList?.slice(0, 100) || [],
-            discoveredSubdomains: pass1Result.subdomains || [],
-            detectedTech: pass1Result.detectedTech || [],
-            openPorts: pass1Result.openPorts || [],
-            fingerprint: pass1Result.fingerprint || {},
-            forms: pass1Result.discovery?.formsList || [],
-            params: pass1Result.discovery?.paramsList || [],
-            enableLearning, generatePOC,
-          },
-        });
-
-        if (!pass2Response.error && pass2Response.data) {
-          const pass2Result = pass2Response.data as ScanResult;
-          setScanResult(pass2Result);
-          setProgress(100);
-          setCurrentPhase("✅ Multi-pass scan complete!");
-          setConnectionStatus("ok");
-          setIsScanning(false);
-          if (pass2Result.scanId) addCompletedScan(pass2Result.scanId);
-          setActiveScan(null);
-          await loadLearningStats();
-          toast({ title: "VAPT Complete (Multi-Pass)", description: `${pass2Result.findings?.length || 0} findings | ${pass2Result.discovery?.subdomains || 0} subdomains` });
-          return;
-        }
-      }
-
-      // If pass2 wasn't needed or failed, use pass1 results
-      setScanResult(pass1Result as ScanResult);
-      setProgress(100);
-      setCurrentPhase("✅ Scan complete!");
+      // Server now runs the full scan in the background. Live findings + completion arrive
+      // via realtime subscriptions on scan_progress / scan_history (already wired up above).
       setConnectionStatus("ok");
-      setIsScanning(false);
-      if (pass1Result.scanId) addCompletedScan(pass1Result.scanId);
-      setActiveScan(null);
-      await loadLearningStats();
-      toast({ title: "VAPT Complete", description: `${pass1Result.findings?.length || 0} findings` });
+      setCurrentPhase("⚡ Scan running in background — live findings will stream in...");
+      toast({
+        title: "Scan started in background",
+        description: `Tracking ${target}. Findings will appear live as they are discovered.`,
+      });
+
     } catch (error: any) {
       const resumed = await restoreRunningScan(target);
       if (resumed) {
