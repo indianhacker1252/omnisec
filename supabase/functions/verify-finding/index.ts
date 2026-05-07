@@ -394,15 +394,66 @@ async function runVerification(finding: any, _script: string, userId?: string, a
   }
 
   else if (cwe.includes("346") || category === "cors") {
-    const r = await httpProbe(endpoint, "GET", "CORS probe with attacker Origin", 1, undefined, { "Origin": "https://evil-canary.example.org" }, retryStats);
-    if (r) probes.push(r);
-    const acao = r?.headers["access-control-allow-origin"];
-    const acac = r?.headers["access-control-allow-credentials"];
-    if (acao === "https://evil-canary.example.org" || acao === "*") {
-      confirmed = true;
-      reasons.push(`Permissive CORS: ACAO=${acao}${acac === "true" ? " with credentials=true (CRITICAL)" : ""}`);
+    // Multi-origin probe set — covers reflected origin, null origin, subdomain trust,
+    // suffix-match bypasses (evil.victim.com), and pre-trusted-origin substring bypasses.
+    const targetHost = (() => { try { return new URL(endpoint).hostname; } catch { return "victim.tld"; } })();
+    const originVariants = [
+      "https://evil-canary.example.org",
+      "null",
+      `https://${targetHost}.evil-canary.example.org`,        // suffix bypass
+      `https://evil-canary-${targetHost}`,                    // prefix bypass
+      `http://${targetHost}`,                                 // protocol downgrade
+    ];
+    let acaoReflected = false; let credentialed = false; let bypassOrigin = "";
+    for (let i = 0; i < originVariants.length; i++) {
+      const origin = originVariants[i];
+      const r = await httpProbe(endpoint, "GET", `CORS probe — Origin: ${origin}`, i+1, undefined, { "Origin": origin }, retryStats);
+      if (!r) continue;
+      probes.push(r);
+      const acao = (r.headers["access-control-allow-origin"] || "").trim();
+      const acac = (r.headers["access-control-allow-credentials"] || "").trim().toLowerCase();
+      const reflects = acao === origin || acao === "*" || (origin === "null" && acao === "null");
+      if (reflects) {
+        acaoReflected = true; bypassOrigin = origin;
+        if (acac === "true") credentialed = true;
+        reasons.push(`ACAO reflects "${origin}" → "${acao}"${acac === "true" ? " + ACAC=true" : ""}`);
+      }
     }
-    steps.push("1. Request with attacker Origin.","2. Inspect ACAO/ACAC for reflection or wildcard.");
+    // Sensitivity oracle: a CORS misconfig is only triagable if the body returns
+    // user-bound / sensitive data. Probe a baseline request and look for markers.
+    if (acaoReflected) {
+      const baseline = await httpProbe(endpoint, "GET", "CORS sensitivity oracle", 99, undefined, { "Origin": bypassOrigin }, retryStats);
+      if (baseline) {
+        probes.push(baseline);
+        const body = baseline.bodySnippet || "";
+        const ct = (baseline.headers["content-type"] || "").toLowerCase();
+        const sensitivePatterns = [
+          /"(email|e_?mail)"\s*:\s*"[^"]+@[^"]+"/i,
+          /"(api[_-]?key|apikey|secret|access[_-]?token|refresh[_-]?token|session[_-]?id|csrf[_-]?token|jwt)"\s*:/i,
+          /"(user(name|_id)?|account(_id)?|customer(_id)?|first[_-]?name|last[_-]?name|phone|address|ssn|dob|balance)"\s*:/i,
+          /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./, // JWT
+          /"role"\s*:\s*"(admin|owner|superuser|root)"/i,
+        ];
+        const matchedMarkers = sensitivePatterns.map(p => body.match(p)?.[0]).filter(Boolean) as string[];
+        const looksJson = ct.includes("application/json") || body.trim().startsWith("{") || body.trim().startsWith("[");
+        if (matchedMarkers.length > 0 || (looksJson && body.length > 50)) {
+          confirmed = true;
+          reasons.push(
+            credentialed
+              ? `EXPLOITABLE — credentialed cross-origin read of sensitive data possible from "${bypassOrigin}"`
+              : `Permissive CORS confirmed; body returns ${looksJson ? "JSON payload" : "data"} ${matchedMarkers.length ? `with markers: ${matchedMarkers.slice(0,3).join(", ")}` : ""}`
+          );
+        } else {
+          reasons.push(`CORS reflects "${bypassOrigin}" but response body has no obvious sensitive markers — manual review required (Bugcrowd will close as N/A without sensitive data).`);
+        }
+      }
+    }
+    steps.push(
+      "1. Send GET with attacker Origin header (5 bypass variants: reflected, null, suffix, prefix, protocol-downgrade).",
+      "2. Inspect ACAO/ACAC reflection — credentialed=true is critical.",
+      "3. Sensitivity oracle: scan response body for email, tokens, JWTs, PII, account fields.",
+      "4. If confirmed, the exploit engine generates an HTML PoC that fetches with credentials:include and displays victim data."
+    );
   }
 
   else if (category === "ssrf" || cwe.includes("918")) {
