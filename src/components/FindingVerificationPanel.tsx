@@ -96,7 +96,20 @@ export const FindingVerificationPanel = ({ finding, onClose, onStatusChange }: P
     URL.revokeObjectURL(url);
   };
 
-  const generateTestScript = async () => {
+  // Auto-run flow for "Retest" button: generate then run verification once.
+  const autoRunStartedRef = useRef(false);
+  useEffect(() => {
+    if (autoRunStartedRef.current) return;
+    if (!(finding as any)?._autoRun) return;
+    autoRunStartedRef.current = true;
+    (async () => {
+      await generateTestScript();
+      setTimeout(() => { void runVerification(); }, 50);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+
     setIsGenerating(true);
     try {
       const { data, error } = await supabase.functions.invoke("verify-finding", {
