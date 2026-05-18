@@ -293,12 +293,16 @@ export const FindingVerificationPanel = ({ finding, onClose, onStatusChange }: P
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
-          <TabsList className="grid grid-cols-2 mx-4 mt-3">
+          <TabsList className="grid grid-cols-3 mx-4 mt-3">
             <TabsTrigger value="verify" className="gap-1 text-xs">
-              <Bug className="h-3 w-3" /> Verify Finding
+              <Bug className="h-3 w-3" /> Verify
+            </TabsTrigger>
+            <TabsTrigger value="exploit" className="gap-1 text-xs" disabled={!exploitProof && !isLoadingProof}>
+              <Terminal className="h-3 w-3" /> Exploit PoC
+              {exploitProof && <span className="ml-1 h-1.5 w-1.5 rounded-full bg-green-400" />}
             </TabsTrigger>
             <TabsTrigger value="poc" className="gap-1 text-xs" disabled={verificationResult?.status !== "confirmed" && !pocReport}>
-              <FileText className="h-3 w-3" /> POC Report
+              <FileText className="h-3 w-3" /> Report
             </TabsTrigger>
           </TabsList>
 
