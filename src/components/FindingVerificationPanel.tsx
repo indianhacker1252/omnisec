@@ -109,7 +109,7 @@ export const FindingVerificationPanel = ({ finding, onClose, onStatusChange }: P
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-
+  const generateTestScript = async () => {
     setIsGenerating(true);
     try {
       const { data, error } = await supabase.functions.invoke("verify-finding", {
