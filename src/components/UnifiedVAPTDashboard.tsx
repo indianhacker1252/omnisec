@@ -587,6 +587,11 @@ export const UnifiedVAPTDashboard = () => {
           onClick={(e) => { e.stopPropagation(); setVerifyFinding(finding); }}>
           <Shield className="h-3 w-3" /> Verify
         </Button>
+        <Button size="sm" variant="outline" className="h-6 text-[10px] gap-1 px-2 border-primary/40 text-primary hover:bg-primary/10"
+          onClick={(e) => { e.stopPropagation(); setVerifyFinding({ ...finding, _autoRun: true } as any); }}
+          title="Re-run the exploit engine and refresh evidence">
+          <RefreshCw className="h-3 w-3" /> Retest
+        </Button>
       </div>
     </Card>
   );
