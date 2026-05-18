@@ -3,7 +3,7 @@
  * - Verify tab: AI generates editable test script, runs it, shows request/response
  * - POC tab: After confirmation, generates a professional bug bounty report
  */
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
