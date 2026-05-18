@@ -419,6 +419,113 @@ export const FindingVerificationPanel = ({ finding, onClose, onStatusChange }: P
             )}
           </TabsContent>
 
+          {/* EXPLOIT POC TAB */}
+          <TabsContent value="exploit" className="flex-1 px-4 pb-4 overflow-hidden flex flex-col">
+            {isLoadingProof && (
+              <div className="text-xs text-muted-foreground py-8 text-center"><RefreshCw className="h-4 w-4 animate-spin inline mr-2" />Loading exploit proof…</div>
+            )}
+            {exploitProof && (() => {
+              const ed = (exploitProof.extracted_data || {}) as any;
+              const steps: string[] = Array.isArray(ed.reproduction) ? ed.reproduction : [];
+              return (
+                <ScrollArea className="flex-1 pr-2">
+                  <div className="space-y-3 pb-4">
+                    {/* Class banner */}
+                    <div className="p-3 bg-destructive/10 border border-destructive/30 rounded">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge className="bg-destructive/20 text-destructive border-destructive/50 text-[10px]">EXPLOITED</Badge>
+                        <span className="text-xs font-semibold">{exploitProof.vuln_class}</span>
+                        <Badge variant="outline" className="text-[10px] ml-auto">{exploitProof.sensitivity_level}</Badge>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">Technique: {exploitProof.exploit_technique}</p>
+                    </div>
+
+                    {/* Impact + Remediation */}
+                    {ed.impact && (
+                      <div className="p-3 bg-orange-500/5 border border-orange-500/20 rounded">
+                        <div className="text-[10px] font-bold text-orange-400 mb-1 uppercase tracking-wide">Impact</div>
+                        <p className="text-xs leading-relaxed">{ed.impact}</p>
+                      </div>
+                    )}
+                    {ed.remediation && (
+                      <div className="p-3 bg-green-500/5 border border-green-500/20 rounded">
+                        <div className="text-[10px] font-bold text-green-400 mb-1 uppercase tracking-wide">Remediation</div>
+                        <p className="text-xs leading-relaxed">{ed.remediation}</p>
+                      </div>
+                    )}
+
+                    {/* Reproduction steps */}
+                    {steps.length > 0 && (
+                      <div className="p-3 bg-primary/5 border border-primary/20 rounded">
+                        <div className="text-[10px] font-bold text-primary mb-2 uppercase tracking-wide">Step-by-Step Reproduction</div>
+                        <ol className="text-xs space-y-1.5 list-decimal list-inside text-muted-foreground">
+                          {steps.map((s, i) => <li key={i} className="leading-relaxed">{s}</li>)}
+                        </ol>
+                      </div>
+                    )}
+
+                    {/* curl */}
+                    {ed.poc_curl && (
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide">Curl PoC</span>
+                          <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => copyToClipboard(ed.poc_curl, "Curl")}><Copy className="h-3 w-3" /></Button>
+                        </div>
+                        <pre className="text-[11px] font-mono bg-background border border-border/50 rounded p-2 whitespace-pre-wrap break-all">{ed.poc_curl}</pre>
+                      </div>
+                    )}
+
+                    {/* Python */}
+                    {ed.poc_python && (
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide">Python PoC</span>
+                          <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => copyToClipboard(ed.poc_python, "Python")}><Copy className="h-3 w-3" /></Button>
+                        </div>
+                        <pre className="text-[11px] font-mono bg-background border border-border/50 rounded p-2 whitespace-pre-wrap break-all max-h-48 overflow-auto">{ed.poc_python}</pre>
+                      </div>
+                    )}
+
+                    {/* HTML PoC */}
+                    {ed.poc_html && (
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide">Browser HTML PoC</span>
+                          <div className="flex gap-1">
+                            <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => copyToClipboard(ed.poc_html, "HTML")}><Copy className="h-3 w-3" /></Button>
+                            <Button size="sm" variant="outline" className="h-6 text-[10px] gap-1" onClick={downloadHtmlPoc}><Download className="h-3 w-3" />Download</Button>
+                          </div>
+                        </div>
+                        <pre className="text-[11px] font-mono bg-background border border-border/50 rounded p-2 whitespace-pre-wrap break-all max-h-40 overflow-auto">{ed.poc_html.slice(0, 1200)}{ed.poc_html.length > 1200 ? "\n…(truncated — download full)" : ""}</pre>
+                      </div>
+                    )}
+
+                    {/* Request / Response dumps */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-1">Request Dump</div>
+                        <pre className="text-[11px] font-mono bg-background border border-border/50 rounded p-2 whitespace-pre-wrap break-all max-h-40 overflow-auto">{exploitProof.request_dump}</pre>
+                      </div>
+                      <div>
+                        <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-1">Response Dump</div>
+                        <pre className="text-[11px] font-mono bg-background border border-border/50 rounded p-2 whitespace-pre-wrap break-all max-h-40 overflow-auto">{exploitProof.response_dump}</pre>
+                      </div>
+                    </div>
+
+                    {/* Extracted sensitive data */}
+                    <div>
+                      <div className="text-[10px] font-bold text-destructive uppercase tracking-wide mb-1">🔓 Extracted Sensitive Data (admin-restricted)</div>
+                      <pre className="text-[11px] font-mono bg-background border border-destructive/30 rounded p-2 whitespace-pre-wrap break-all max-h-48 overflow-auto">{JSON.stringify(Object.fromEntries(Object.entries(ed).filter(([k]) => !["poc_curl","poc_python","poc_html","poc_html_filename","impact","remediation","reproduction"].includes(k))), null, 2)}</pre>
+                    </div>
+                  </div>
+                </ScrollArea>
+              );
+            })()}
+            {!exploitProof && !isLoadingProof && (
+              <div className="text-xs text-muted-foreground py-8 text-center">Run verification — if the exploit confirms, the full PoC bundle (curl / Python / HTML / impact / remediation / step-by-step) will appear here.</div>
+            )}
+          </TabsContent>
+
           {/* POC TAB */}
           <TabsContent value="poc" className="flex-1 px-4 pb-4 overflow-hidden flex flex-col">
             <div className="flex items-center justify-between mb-3 mt-2">
