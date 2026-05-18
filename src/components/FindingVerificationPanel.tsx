@@ -62,6 +62,39 @@ export const FindingVerificationPanel = ({ finding, onClose, onStatusChange }: P
   const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
   const [pocReport, setPocReport] = useState("");
   const [isGeneratingPOC, setIsGeneratingPOC] = useState(false);
+  const [exploitProof, setExploitProof] = useState<any | null>(null);
+  const [isLoadingProof, setIsLoadingProof] = useState(false);
+
+  const fetchExploitProof = async (proofId: string) => {
+    setIsLoadingProof(true);
+    try {
+      const { data, error } = await supabase
+        .from("finding_exploit_proofs")
+        .select("*")
+        .eq("id", proofId)
+        .maybeSingle();
+      if (error) throw error;
+      setExploitProof(data);
+      if (data) setActiveTab("exploit");
+    } catch (e: any) {
+      console.error("Failed to load exploit proof:", e);
+      toast({ title: "Could not load exploit proof", description: e.message, variant: "destructive" });
+    } finally {
+      setIsLoadingProof(false);
+    }
+  };
+
+  const downloadHtmlPoc = () => {
+    const ed = (exploitProof?.extracted_data || {}) as any;
+    if (!ed.poc_html) return;
+    const blob = new Blob([ed.poc_html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = ed.poc_html_filename || `poc-${(finding.title || "exploit").replace(/[^a-z0-9]/gi, "_")}.html`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const generateTestScript = async () => {
     setIsGenerating(true);
