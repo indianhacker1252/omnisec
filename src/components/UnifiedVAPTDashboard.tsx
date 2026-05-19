@@ -27,6 +27,8 @@ import { FindingVerificationPanel } from "@/components/FindingVerificationPanel"
 import { TargetTreeVisualization } from "@/components/TargetTreeVisualization";
 import { MutationMatrix } from "@/components/MutationMatrix";
 import { ScanHistoryViewer } from "@/components/ScanHistoryViewer";
+import { LiveFindingsStream } from "@/components/LiveFindingsStream";
+import { OWASPCoverageMatrix } from "@/components/OWASPCoverageMatrix";
 import { useBackgroundScan } from "@/context/BackgroundScanContext";
 import {
   Brain, Zap, Target, Shield, Globe, Play, RefreshCw, AlertTriangle,
@@ -796,6 +798,22 @@ export const UnifiedVAPTDashboard = () => {
               <div ref={logsEndRef} />
             </ScrollArea>
           </Card>
+        </div>
+      )}
+
+      {/* Live Findings + OWASP Coverage (always visible once a scan is active or has results) */}
+      {(isScanning || scanResult || activeScanId) && target && (
+        <div className="space-y-4">
+          <OWASPCoverageMatrix
+            findings={scanResult?.findings || []}
+            phases={liveLogs.map(l => l.phase)}
+          />
+          <LiveFindingsStream
+            target={target}
+            scanId={activeScanId}
+            isScanning={isScanning}
+            scanFindings={scanResult?.findings || []}
+          />
         </div>
       )}
 
