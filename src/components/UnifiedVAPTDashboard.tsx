@@ -801,6 +801,22 @@ export const UnifiedVAPTDashboard = () => {
         </div>
       )}
 
+      {/* Live Findings + OWASP Coverage (always visible once a scan is active or has results) */}
+      {(isScanning || scanResult || activeScanId) && target && (
+        <div className="space-y-4">
+          <OWASPCoverageMatrix
+            findings={scanResult?.findings || []}
+            phases={liveLogs.map(l => l.phase)}
+          />
+          <LiveFindingsStream
+            target={target}
+            scanId={activeScanId}
+            isScanning={isScanning}
+            scanFindings={scanResult?.findings || []}
+          />
+        </div>
+      )}
+
       {/* Results */}
       {scanResult && (
         <div className="space-y-6">
