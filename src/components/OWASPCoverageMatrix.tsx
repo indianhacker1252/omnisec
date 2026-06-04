@@ -9,14 +9,14 @@ import { Badge } from "@/components/ui/badge";
 import { CheckCircle, Circle, ShieldAlert } from "lucide-react";
 
 const OWASP_2021 = [
-  { id: "A01", name: "Broken Access Control", keys: ["a01", "access control", "idor", "bola", "bopla", "auth_bypass", "privilege"] },
-  { id: "A02", name: "Cryptographic Failures", keys: ["a02", "crypto", "weak cipher", "tls", "ssl", "plaintext"] },
-  { id: "A03", name: "Injection", keys: ["a03", "sqli", "xss", "command injection", "xxe", "ssti", "ldap", "nosql"] },
-  { id: "A04", name: "Insecure Design", keys: ["a04", "design", "business logic", "race condition"] },
-  { id: "A05", name: "Security Misconfiguration", keys: ["a05", "misconfig", "cors", "header", "cookie", "directory listing", "default cred"] },
-  { id: "A06", name: "Vulnerable Components", keys: ["a06", "cve", "outdated", "vulnerable component", "dependency"] },
-  { id: "A07", name: "Auth & Identity Failures", keys: ["a07", "auth", "session", "jwt", "oauth", "credential"] },
-  { id: "A08", name: "Software & Data Integrity", keys: ["a08", "deserialization", "integrity", "supply chain"] },
+  { id: "A01", name: "Broken Access Control", keys: ["a01", "access control", "idor", "bola", "bopla", "auth_bypass", "privilege", "takeover", "open_redirect", "csrf", "directory_listing", "exposed", "unauthenticated", "oauth_open", "oauth_redirect"] },
+  { id: "A02", name: "Cryptographic Failures", keys: ["a02", "crypto", "weak cipher", "tls", "ssl", "plaintext", "nossl", "no_ssl", "implicit_flow", "weak_jwt"] },
+  { id: "A03", name: "Injection", keys: ["a03", "sqli", "sql_injection", "xss", "dom-xss", "dom_xss", "command", "rce", "xxe", "ssti", "ldap", "nosql", "injection", "header_injection", "crlf", "host_header", "traversal", "lfi", "rfi"] },
+  { id: "A04", name: "Insecure Design", keys: ["a04", "design", "business_logic", "business logic", "race", "workflow", "logic_flaw"] },
+  { id: "A05", name: "Security Misconfiguration", keys: ["a05", "misconfig", "cors", "header", "cookie", "directory listing", "default cred", "graphql_introspection", "field_suggestion", "discovery", "verbose_error", "debug"] },
+  { id: "A06", name: "Vulnerable Components", keys: ["a06", "cve", "outdated", "vulnerable component", "dependency", "version"] },
+  { id: "A07", name: "Auth & Identity Failures", keys: ["a07", "auth", "session", "jwt", "oauth", "credential", "weak_password", "no_pkce", "mfa", "brute"] },
+  { id: "A08", name: "Software & Data Integrity", keys: ["a08", "deserialization", "integrity", "supply chain", "signed", "subresource"] },
   { id: "A09", name: "Security Logging & Monitoring", keys: ["a09", "logging", "monitoring", "audit"] },
   { id: "A10", name: "SSRF", keys: ["a10", "ssrf"] },
 ];

@@ -172,6 +172,41 @@ serve(async (req) => {
     const detectedTech: string[] = [];
     const targetTree: TargetNode = { name: targetUrl.hostname, type: 'domain', status: 'scanning', children: [], meta: {} };
 
+    // ── Live-stream every finding to recon_findings so it appears in the dashboard
+    //    Live Findings Stream the moment it's discovered (not only at scan end).
+    const streamFindingLive = async (f: any) => {
+      try {
+        let host = targetUrl.hostname;
+        try { if (f?.endpoint) host = new URL(f.endpoint.startsWith('http') ? f.endpoint : `https://${f.endpoint}`).hostname; } catch { /* keep default */ }
+        const key = `${f.title || ''}|${f.endpoint || ''}|${f.parameter || f.vulnerable_parameter || ''}|${(f.payload || '').slice(0, 60)}`;
+        const hashBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+        const hashHex = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+        await supabase.from('recon_findings').upsert({
+          target_host: host,
+          url_path: f.endpoint || null,
+          finding_type: (f.category || f.id || 'vapt_finding').toString().toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 60),
+          title: (f.title || 'Untitled Finding').toString().slice(0, 250),
+          description: (f.description || '').toString().slice(0, 2000),
+          severity: (f.severity || 'info').toString().toLowerCase(),
+          vulnerable_parameter: f.parameter || f.vulnerable_parameter || null,
+          confidence_score: typeof f.confidence === 'number' ? Math.min(100, Math.max(0, Math.round(f.confidence))) : 60,
+          verification_status: f.dualConfirmed ? 'confirmed' : 'pending',
+          source_module: 'autonomous-vapt',
+          evidence: { evidence: (f.evidence || '').toString().slice(0, 1500), evidence2: (f.evidence2 || '').toString().slice(0, 800), response: (f.response || '').toString().slice(0, 800) },
+          raw_data: { scan_id: scanId, owasp: f.owasp, mitre: f.mitre, cwe: f.cwe, cvss: f.cvss, method: f.method, payload: (f.payload || '').toString().slice(0, 600), category: f.category, poc: (f.poc || '').toString().slice(0, 1500) },
+          hash_signature: hashHex,
+        }, { onConflict: 'hash_signature', ignoreDuplicates: false });
+      } catch (e) { console.log('streamFindingLive error:', (e as any)?.message); }
+    };
+
+    // Override push so every finding flows to the live stream automatically.
+    const _origPush = allFindings.push.bind(allFindings);
+    (allFindings as any).push = (...items: Finding[]) => {
+      for (const it of items) { streamFindingLive(it).catch(() => {}); }
+      return _origPush(...items);
+    };
+
+
     const emitProgress = async (phase: string, phaseNumber: number, progress: number, message: string, extra: any = {}) => {
       try {
         await supabase.from('scan_progress').insert({
