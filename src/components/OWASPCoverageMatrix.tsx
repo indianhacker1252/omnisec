@@ -9,16 +9,16 @@ import { Badge } from "@/components/ui/badge";
 import { CheckCircle, Circle, ShieldAlert } from "lucide-react";
 
 const OWASP_2021 = [
-  { id: "A01", name: "Broken Access Control", keys: ["a01", "access control", "idor", "bola", "bopla", "auth_bypass", "privilege", "takeover", "open_redirect", "csrf", "directory_listing", "exposed", "unauthenticated", "oauth_open", "oauth_redirect"] },
-  { id: "A02", name: "Cryptographic Failures", keys: ["a02", "crypto", "weak cipher", "tls", "ssl", "plaintext", "nossl", "no_ssl", "implicit_flow", "weak_jwt"] },
-  { id: "A03", name: "Injection", keys: ["a03", "sqli", "sql_injection", "xss", "dom-xss", "dom_xss", "command", "rce", "xxe", "ssti", "ldap", "nosql", "injection", "header_injection", "crlf", "host_header", "traversal", "lfi", "rfi"] },
-  { id: "A04", name: "Insecure Design", keys: ["a04", "design", "business_logic", "business logic", "race", "workflow", "logic_flaw"] },
-  { id: "A05", name: "Security Misconfiguration", keys: ["a05", "misconfig", "cors", "header", "cookie", "directory listing", "default cred", "graphql_introspection", "field_suggestion", "discovery", "verbose_error", "debug"] },
-  { id: "A06", name: "Vulnerable Components", keys: ["a06", "cve", "outdated", "vulnerable component", "dependency", "version"] },
-  { id: "A07", name: "Auth & Identity Failures", keys: ["a07", "auth", "session", "jwt", "oauth", "credential", "weak_password", "no_pkce", "mfa", "brute"] },
-  { id: "A08", name: "Software & Data Integrity", keys: ["a08", "deserialization", "integrity", "supply chain", "signed", "subresource"] },
+  { id: "A01", name: "Broken Access Control", keys: ["a01", "access control", "idor", "bola", "bopla", "auth_bypass", "privilege", "takeover", "open_redirect", "csrf", "directory_listing", "exposed", "unauthenticated", "oauth_open", "oauth_redirect", "bola_multi_session", "path_normalization_desync", "path_desync", "cswsh"] },
+  { id: "A02", name: "Cryptographic Failures", keys: ["a02", "crypto", "weak cipher", "tls", "ssl", "plaintext", "nossl", "no_ssl", "implicit_flow", "weak_jwt", "jwt_alg_none", "jwt_weak_secret", "jwt_confusion"] },
+  { id: "A03", name: "Injection", keys: ["a03", "sqli", "sql_injection", "xss", "dom-xss", "dom_xss", "command", "rce", "xxe", "ssti", "ldap", "nosql", "injection", "header_injection", "crlf", "host_header", "traversal", "lfi", "rfi", "prototype_pollution", "stored_xss_sink", "ssti_engine_detected", "dom_clobber", "dom_clobber_candidate"] },
+  { id: "A04", name: "Insecure Design", keys: ["a04", "design", "business_logic", "business logic", "race", "workflow", "logic_flaw", "mass_assignment", "hpp", "race_condition_candidate"] },
+  { id: "A05", name: "Security Misconfiguration", keys: ["a05", "misconfig", "cors", "header", "cookie", "directory listing", "default cred", "graphql_introspection", "field_suggestion", "discovery", "verbose_error", "debug", "cache_poison", "request_smuggling_candidate", "range_cache_deception", "cors_wildcard_subdomain", "metadata_fuzz_dictionary", "aws_lambda_backend", "azure_functions_backend"] },
+  { id: "A06", name: "Vulnerable Components", keys: ["a06", "cve", "outdated", "vulnerable component", "dependency", "version", "open_port"] },
+  { id: "A07", name: "Auth & Identity Failures", keys: ["a07", "auth", "session", "jwt", "oauth", "credential", "weak_password", "no_pkce", "mfa", "brute", "oauth_state_csrf", "graphql_batching_enabled", "saml_endpoint_exposed"] },
+  { id: "A08", name: "Software & Data Integrity", keys: ["a08", "deserialization", "integrity", "supply chain", "signed", "subresource", "java_deserialization_candidate", "aspnet_viewstate_exposed", "unsigned_cicd_webhook", "polyglot_upload_lfi_combo"] },
   { id: "A09", name: "Security Logging & Monitoring", keys: ["a09", "logging", "monitoring", "audit"] },
-  { id: "A10", name: "SSRF", keys: ["a10", "ssrf"] },
+  { id: "A10", name: "SSRF", keys: ["a10", "ssrf", "redirect_ssrf_chain", "pdf_render_ssrf_candidate", "oast_callback"] },
 ];
 
 interface Props {
