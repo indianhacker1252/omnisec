@@ -118,20 +118,20 @@ serve(async (req) => {
     const body = await req.json();
     const {
       target, maxDepth = 3, enableLearning = true, generatePOC = true,
-      pass = 1, continuation = false, scanId: chainScanId, passNumber, passName,
+      pass = 1, continuation = false, scanId: chainScanId, passNumber, passName, userId: chainUserId,
     } = body;
 
     // ═══ BACKGROUND CHAIN CALL (from pg_net trigger) — no user JWT, allow service-role ═══
     if (continuation === true || body.action === "continue_scan" || passNumber) {
-      // Resolve operator from existing scan_session for downstream learning
-      let user: any = { id: null };
-      if (chainScanId) {
-        const { data: sess } = await supabase
-          .from('scan_sessions').select('operator_id').eq('id', chainScanId).maybeSingle();
-        if (sess?.operator_id) user = { id: sess.operator_id };
+      // Resolve operator from the owning scan row; scan_sessions does not exist in this schema.
+      let user: any = { id: chainUserId || null };
+      if (chainScanId && !user.id) {
+        const { data: scanOwner } = await supabase
+          .from('scan_history').select('user_id').eq('id', chainScanId).maybeSingle();
+        if (scanOwner?.user_id) user = { id: scanOwner.user_id };
       }
       return await handlePass2(
-        { ...body, scanId: chainScanId, pass: passNumber || 2 },
+        { ...body, ...(body.previousPayload || {}), scanId: chainScanId, pass: passNumber || 2, passNumber: passNumber || 2, userId: user.id },
         supabase, user, LOVABLE_API_KEY
       );
     }
@@ -172,6 +172,14 @@ serve(async (req) => {
     const detectedTech: string[] = [];
     const targetTree: TargetNode = { name: targetUrl.hostname, type: 'domain', status: 'scanning', children: [], meta: {} };
 
+    await supabase.from('scan_history').upsert({
+      id: scanId,
+      module: 'autonomous_vapt', scan_type: 'Autonomous VAPT v12 - Multi-Pass XBOW',
+      target: targetUrl.toString(), status: 'running', findings_count: 0,
+      started_at: new Date().toISOString(), user_id: user.id,
+      report: { findings: [], targetTree, openPorts, detectedTech, phase: 'queued' }
+    }, { onConflict: 'id' });
+
     // ── Live-stream every finding to recon_findings so it appears in the dashboard
     //    Live Findings Stream the moment it's discovered (not only at scan end).
     const streamFindingLive = async (f: any) => {
@@ -182,6 +190,7 @@ serve(async (req) => {
         const hashBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
         const hashHex = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
         await supabase.from('recon_findings').upsert({
+          scan_id: scanId,
           target_host: host,
           url_path: f.endpoint || null,
           finding_type: (f.category || f.id || 'vapt_finding').toString().toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 60),
@@ -241,19 +250,24 @@ serve(async (req) => {
         info: findings.filter(f => f.severity === 'info').length
       };
       try {
-        const { error: histErr } = await supabase.from('scan_history').insert({
+        const { error: histErr } = await supabase.from('scan_history').upsert({
+          id: scanId,
           module: 'autonomous_vapt', scan_type: 'Autonomous VAPT v11 - Legend-Grade',
           target: targetUrl.toString(), status, findings_count: findings.length,
+          completed_at: status === 'completed' ? new Date().toISOString() : null,
           duration_ms: Date.now() - scanStart,
-          report: { findings: trimmedFindings.slice(0, 50), targetTree, openPorts, detectedTech }
-        });
+          report: { findings: trimmedFindings.slice(0, 50), targetTree, openPorts, detectedTech },
+          user_id: user.id,
+        }, { onConflict: 'id' });
         if (histErr) console.error('scan_history insert error:', JSON.stringify(histErr));
         
         const { error: repErr } = await supabase.from('security_reports').insert({
+          scan_id: scanId,
           module: 'autonomous_vapt',
           title: `XBOW VAPT v11 - ${targetUrl.hostname}`,
           summary: `${findings.length} exploit-validated: ${severityCounts.critical}C ${severityCounts.high}H ${severityCounts.medium}M | ${discoveredSubdomains.length} subs, ${openPorts.length} ports`,
-          findings: trimmedFindings, severity_counts: severityCounts, recommendations: []
+          findings: trimmedFindings, severity_counts: severityCounts, recommendations: [],
+          user_id: user.id,
         });
         if (repErr) console.error('security_reports insert error:', JSON.stringify(repErr));
       } catch (e) { console.error('DB save error:', e); }
@@ -542,17 +556,17 @@ serve(async (req) => {
       targetTree.meta = { totalFindings: verifiedFindings.length, scanTime: Date.now() - scanStart };
 
       clearTimeout(timeoutId);
-      const { severityCounts, findings } = await saveResultsToDB('completed', verifiedFindings);
+      const { severityCounts, findings } = await saveResultsToDB('running', verifiedFindings);
 
-      await emitAIThought(`Legend-Grade scan complete! ${findings.length} exploit-validated findings. ${findings.filter(f => f.exploitValidated).length} deterministically confirmed.`, 'complete', TOTAL_PHASES);
-      await emitProgress('complete', TOTAL_PHASES, 100, `Scan complete! ${findings.length} exploit-validated findings.`);
+      await emitAIThought(`Pass 1 complete with ${findings.length} exploit-validated findings. Continuing tiers 2–12 before finalizing.`, 'chain_kickoff', TOTAL_PHASES);
+      await emitProgress('chain_kickoff', TOTAL_PHASES, 82, `Pass 1 complete. Starting chained tiers 2–12...`);
 
       // ═══ MULTI-PASS CHAIN: insert Pass 1 as completed → DB trigger fires Pass 2..6 in background ═══
       try {
         await supabase.from('scan_passes').insert({
-          scan_id: scanId, pass_number: 1, pass_name: 'recon_initial', status: 'pending',
+          scan_id: scanId, pass_number: 1, pass_name: 'recon_initial', status: 'pending', user_id: user.id,
           target: targetUrl.toString(), findings_count: findings.length,
-          payload: { endpoints: discoveredEndpoints.slice(0, 100), subdomains: discoveredSubdomains.slice(0, 50), tech: detectedTech, partialFindings: verifiedFindings.slice(0, 30) }
+          payload: { endpoints: discoveredEndpoints.slice(0, 100), discoveredEndpoints: discoveredEndpoints.slice(0, 100), subdomains: discoveredSubdomains.slice(0, 50), discoveredSubdomains: discoveredSubdomains.slice(0, 50), tech: detectedTech, detectedTech, openPorts, fingerprint, forms: discoveryResults.forms?.slice(0, 50) || [], params: discoveryResults.params?.slice(0, 200) || [], partialFindings: verifiedFindings.slice(0, 30), userId: user.id }
         });
         await supabase.from('scan_passes').update({ status: 'completed', completed_at: new Date().toISOString() })
           .eq('scan_id', scanId).eq('pass_number', 1);
@@ -2532,7 +2546,7 @@ async function handlePass2(body: any, supabase: any, user: any, apiKey: string |
     target, scanId: existingScanId,
     partialFindings = [], discoveredEndpoints = [], discoveredSubdomains = [],
     detectedTech = [], openPorts = [], fingerprint = {},
-    forms = [], params = [], enableLearning = true, generatePOC = true,
+    forms = [], params = [], enableLearning = true, generatePOC = true, passNumber = 2,
   } = body;
 
   let targetUrl: URL;
@@ -2542,6 +2556,9 @@ async function handlePass2(body: any, supabase: any, user: any, apiKey: string |
 
   const scanId = existingScanId || crypto.randomUUID();
   const allFindings: Finding[] = [...partialFindings];
+
+  await supabase.from('scan_passes').update({ status: 'running', started_at: new Date().toISOString() })
+    .eq('scan_id', scanId).eq('pass_number', passNumber);
 
   const emitProgress = async (phase: string, phaseNumber: number, progress: number, message: string, extra: any = {}) => {
     try {
@@ -2603,28 +2620,27 @@ async function handlePass2(body: any, supabase: any, user: any, apiKey: string |
       info: verifiedFindings.filter((f: Finding) => f.severity === 'info').length,
     };
 
-    // Save final results
+    // Save pass results without finalizing the whole scan; later chained passes continue from this payload.
     const trimmedFindings = verifiedFindings.map((f: Finding) => ({
       ...f, evidence: f.evidence?.slice(0, 500), evidence2: f.evidence2?.slice(0, 500),
       response: f.response?.slice(0, 300), poc: f.poc?.slice(0, 2000), exploitCode: f.exploitCode?.slice(0, 1500),
     }));
 
     try {
-      await supabase.from('scan_history').insert({
+      await supabase.from('scan_history').update({
         module: 'autonomous_vapt', scan_type: 'Autonomous VAPT v12 - Multi-Pass XBOW',
-        target: targetUrl.toString(), status: 'completed', findings_count: verifiedFindings.length,
+        target: targetUrl.toString(), status: 'running', findings_count: verifiedFindings.length,
         duration_ms: Date.now() - scanStart,
         report: { findings: trimmedFindings.slice(0, 60), openPorts, detectedTech, subdomains: discoveredSubdomains }
-      });
-      await supabase.from('security_reports').insert({
-        module: 'autonomous_vapt',
-        title: `XBOW VAPT v12 Multi-Pass - ${targetUrl.hostname}`,
-        summary: `${verifiedFindings.length} exploit-validated: ${severityCounts.critical}C ${severityCounts.high}H ${severityCounts.medium}M`,
-        findings: trimmedFindings, severity_counts: severityCounts, recommendations: correlationResult.recommendations || []
-      });
+      }).eq('id', scanId);
     } catch (e) { console.error('P2 DB save:', e); }
 
-    await emitProgress('complete', TOTAL_PHASES, 100, `Multi-pass scan complete! ${verifiedFindings.length} exploit-validated findings.`);
+    await emitProgress('chain_pass', passNumber, Math.min(94, 82 + passNumber), `Pass ${passNumber} complete. Continuing chained tiers...`);
+
+    await supabase.from('scan_passes').update({
+      status: 'completed', completed_at: new Date().toISOString(), findings_count: verifiedFindings.length,
+      payload: { ...body, partialFindings: verifiedFindings.slice(0, 60), detectedTech, openPorts, fingerprint, discoveredEndpoints, discoveredSubdomains, forms, params, userId: user.id }
+    }).eq('scan_id', scanId).eq('pass_number', passNumber);
 
     return new Response(JSON.stringify({
       success: true, target: targetUrl.toString(), scanTime: Date.now() - scanStart,
@@ -2638,17 +2654,21 @@ async function handlePass2(body: any, supabase: any, user: any, apiKey: string |
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e: any) {
     console.error('Pass 2 error:', e);
-    // Save whatever we have
+    // Save whatever we have and still advance the tier chain.
     const findings = deduplicateFindings(allFindings);
     try {
-      await supabase.from('scan_history').insert({
+      await supabase.from('scan_history').update({
         module: 'autonomous_vapt', scan_type: 'Autonomous VAPT v12 (P2-partial)',
-        target: targetUrl.toString(), status: 'completed', findings_count: findings.length,
+        target: targetUrl.toString(), status: 'running', findings_count: findings.length,
         duration_ms: Date.now() - scanStart,
         report: { findings: findings.slice(0, 60).map((f: Finding) => ({ ...f, evidence: f.evidence?.slice(0, 500), poc: f.poc?.slice(0, 2000) })) }
-      });
+      }).eq('id', scanId);
     } catch {}
-    await emitProgress('complete', TOTAL_PHASES, 100, `Pass 2 complete (partial). ${findings.length} findings.`);
+    await supabase.from('scan_passes').update({
+      status: 'completed', completed_at: new Date().toISOString(), error_message: e?.message?.slice(0, 500),
+      findings_count: findings.length, payload: { ...body, partialFindings: findings.slice(0, 60), userId: user.id }
+    }).eq('scan_id', scanId).eq('pass_number', passNumber);
+    await emitProgress('chain_pass', passNumber, Math.min(94, 82 + passNumber), `Pass ${passNumber} complete (partial). Continuing...`);
     return new Response(JSON.stringify({
       success: true, target: targetUrl.toString(), findings, scanTime: Date.now() - scanStart,
       summary: {

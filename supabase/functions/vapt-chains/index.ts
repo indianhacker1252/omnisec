@@ -770,6 +770,52 @@ serve(async (req) => {
       payload: { results, detectorsRun: detectors.length },
     }).eq("scan_id", scanId).eq("pass_number", passNumber);
 
+    const { data: rows } = await supabase
+      .from("recon_findings")
+      .select("title,description,severity,url_path,finding_type,confidence_score,evidence,raw_data,source_module")
+      .eq("scan_id", scanId)
+      .limit(500);
+    const findings = (rows || []).map((r: any) => ({
+      id: `${r.finding_type}-${r.url_path || "/"}`,
+      title: r.title,
+      description: r.description,
+      severity: r.severity,
+      endpoint: `${url.origin}${r.url_path || "/"}`,
+      category: r.finding_type,
+      confidence: r.confidence_score || 60,
+      evidence: r.evidence,
+      owasp: r.raw_data?.owasp,
+      cwe: r.raw_data?.cwe,
+      mitre: r.raw_data?.mitre ? [r.raw_data.mitre] : [],
+    }));
+    const severityCounts = {
+      critical: findings.filter((f: any) => f.severity === "critical").length,
+      high: findings.filter((f: any) => f.severity === "high").length,
+      medium: findings.filter((f: any) => f.severity === "medium").length,
+      low: findings.filter((f: any) => f.severity === "low").length,
+      info: findings.filter((f: any) => f.severity === "info").length,
+    };
+    await supabase.from("scan_history").update({
+      status: "completed",
+      completed_at: new Date().toISOString(),
+      findings_count: findings.length,
+      report: { findings, chainResults: results, detectorsRun: detectors.length },
+    }).eq("id", scanId);
+    await supabase.from("security_reports").insert({
+      scan_id: scanId,
+      module: "omnisec_vapt_chains",
+      title: `Full OWASP A01-A10 chained VAPT - ${host}`,
+      summary: `${findings.length} findings after ${detectors.length} chained detectors`,
+      findings,
+      severity_counts: severityCounts,
+      recommendations: ["Review verified critical/high findings first", "Retest authenticated BOLA paths with supplied user sessions"],
+    });
+    await supabase.from("scan_progress").insert({
+      scan_id: scanId, phase: "complete", phase_number: 12, total_phases: 12,
+      progress: 100, message: `Full chained VAPT complete: ${findings.length} findings, ${detectors.length} detectors executed.`,
+      findings_so_far: findings.length, endpoints_discovered: 0,
+    });
+
     return new Response(JSON.stringify({ ok: true, host, detectorsRun: detectors.length, results }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
