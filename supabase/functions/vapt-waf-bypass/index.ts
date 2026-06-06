@@ -99,9 +99,15 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {
     const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-    const body: ProbeReq = await req.json();
-    const { scanId, targetUrl, parameter, payload, method = "GET", maxAttempts = 5 } = body;
+    const body: ProbeReq & { target?: string; passNumber?: number; previousPayload?: any } = await req.json();
+    const { scanId, parameter, payload, method = "GET", maxAttempts = 5, passNumber = 11 } = body;
+    const targetUrl = body.targetUrl || body.target;
     if (!targetUrl) return new Response(JSON.stringify({ error: "targetUrl required" }), { status: 400, headers: corsHeaders });
+
+    if (scanId) {
+      await supabase.from("scan_passes").update({ status: "running", started_at: new Date().toISOString() })
+        .eq("scan_id", scanId).eq("pass_number", passNumber);
+    }
 
     // SSRF guard
     const u = new URL(targetUrl);
@@ -116,6 +122,11 @@ serve(async (req) => {
     await emit(supabase, scanId, `🛡️ WAF detected: ${fp.vendor} (conf ${fp.confidence})`);
 
     if (!payload || !parameter) {
+      if (scanId) {
+        await supabase.from("scan_passes").update({
+          status: "completed", completed_at: new Date().toISOString(), payload: { waf: fp, noPayloadProvided: true },
+        }).eq("scan_id", scanId).eq("pass_number", passNumber);
+      }
       return new Response(JSON.stringify({ waf: fp }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
@@ -146,10 +157,25 @@ serve(async (req) => {
       if (!blocked) { success = true; current = mutated; break; }
     }
 
+    if (scanId) {
+      await supabase.from("scan_passes").update({
+        status: "completed", completed_at: new Date().toISOString(),
+        payload: { waf: fp, success, attempts, finalPayload: current },
+      }).eq("scan_id", scanId).eq("pass_number", passNumber);
+    }
+
     return new Response(JSON.stringify({ waf: fp, success, attempts, finalPayload: current }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
+    try {
+      const body = await req.clone().json().catch(() => ({}));
+      if (body.scanId) {
+        await supabase.from("scan_passes").update({
+          status: "completed", completed_at: new Date().toISOString(), error_message: (e instanceof Error ? e.message : String(e)).slice(0, 500),
+        }).eq("scan_id", body.scanId).eq("pass_number", body.passNumber || 11);
+      }
+    } catch {}
     return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
