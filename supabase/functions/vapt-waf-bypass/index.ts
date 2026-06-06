@@ -97,8 +97,9 @@ async function emit(supabase: any, scanId: string | undefined, message: string, 
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+  let supabase: any = null;
   try {
-    const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
     const body: ProbeReq & { target?: string; passNumber?: number; previousPayload?: any } = await req.json();
     const { scanId, parameter, payload, method = "GET", maxAttempts = 5, passNumber = 11 } = body;
     const targetUrl = body.targetUrl || body.target;
@@ -170,7 +171,7 @@ serve(async (req) => {
   } catch (e) {
     try {
       const body = await req.clone().json().catch(() => ({}));
-      if (body.scanId) {
+      if (body.scanId && supabase) {
         await supabase.from("scan_passes").update({
           status: "completed", completed_at: new Date().toISOString(), error_message: (e instanceof Error ? e.message : String(e)).slice(0, 500),
         }).eq("scan_id", body.scanId).eq("pass_number", body.passNumber || 11);
