@@ -107,6 +107,7 @@ export type Database = {
           id: string
           last_seen: string
           raw_data: Json | null
+          scan_id: string | null
           seen_count: number
           severity: string
           source_module: string | null
@@ -128,6 +129,7 @@ export type Database = {
           id?: string
           last_seen?: string
           raw_data?: Json | null
+          scan_id?: string | null
           seen_count?: number
           severity?: string
           source_module?: string | null
@@ -149,6 +151,7 @@ export type Database = {
           id?: string
           last_seen?: string
           raw_data?: Json | null
+          scan_id?: string | null
           seen_count?: number
           severity?: string
           source_module?: string | null
