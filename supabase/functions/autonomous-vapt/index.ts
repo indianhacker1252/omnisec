@@ -556,10 +556,10 @@ serve(async (req) => {
       targetTree.meta = { totalFindings: verifiedFindings.length, scanTime: Date.now() - scanStart };
 
       clearTimeout(timeoutId);
-      const { severityCounts, findings } = await saveResultsToDB('completed', verifiedFindings);
+      const { severityCounts, findings } = await saveResultsToDB('running', verifiedFindings);
 
-      await emitAIThought(`Legend-Grade scan complete! ${findings.length} exploit-validated findings. ${findings.filter(f => f.exploitValidated).length} deterministically confirmed.`, 'complete', TOTAL_PHASES);
-      await emitProgress('complete', TOTAL_PHASES, 100, `Scan complete! ${findings.length} exploit-validated findings.`);
+      await emitAIThought(`Pass 1 complete with ${findings.length} exploit-validated findings. Continuing tiers 2–12 before finalizing.`, 'chain_kickoff', TOTAL_PHASES);
+      await emitProgress('chain_kickoff', TOTAL_PHASES, 82, `Pass 1 complete. Starting chained tiers 2–12...`);
 
       // ═══ MULTI-PASS CHAIN: insert Pass 1 as completed → DB trigger fires Pass 2..6 in background ═══
       try {
