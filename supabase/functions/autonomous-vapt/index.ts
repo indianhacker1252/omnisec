@@ -118,20 +118,20 @@ serve(async (req) => {
     const body = await req.json();
     const {
       target, maxDepth = 3, enableLearning = true, generatePOC = true,
-      pass = 1, continuation = false, scanId: chainScanId, passNumber, passName,
+      pass = 1, continuation = false, scanId: chainScanId, passNumber, passName, userId: chainUserId,
     } = body;
 
     // ═══ BACKGROUND CHAIN CALL (from pg_net trigger) — no user JWT, allow service-role ═══
     if (continuation === true || body.action === "continue_scan" || passNumber) {
-      // Resolve operator from existing scan_session for downstream learning
-      let user: any = { id: null };
-      if (chainScanId) {
-        const { data: sess } = await supabase
-          .from('scan_sessions').select('operator_id').eq('id', chainScanId).maybeSingle();
-        if (sess?.operator_id) user = { id: sess.operator_id };
+      // Resolve operator from the owning scan row; scan_sessions does not exist in this schema.
+      let user: any = { id: chainUserId || null };
+      if (chainScanId && !user.id) {
+        const { data: scanOwner } = await supabase
+          .from('scan_history').select('user_id').eq('id', chainScanId).maybeSingle();
+        if (scanOwner?.user_id) user = { id: scanOwner.user_id };
       }
       return await handlePass2(
-        { ...body, scanId: chainScanId, pass: passNumber || 2 },
+        { ...body, ...(body.previousPayload || {}), scanId: chainScanId, pass: passNumber || 2, passNumber: passNumber || 2, userId: user.id },
         supabase, user, LOVABLE_API_KEY
       );
     }
@@ -172,6 +172,14 @@ serve(async (req) => {
     const detectedTech: string[] = [];
     const targetTree: TargetNode = { name: targetUrl.hostname, type: 'domain', status: 'scanning', children: [], meta: {} };
 
+    await supabase.from('scan_history').upsert({
+      id: scanId,
+      module: 'autonomous_vapt', scan_type: 'Autonomous VAPT v12 - Multi-Pass XBOW',
+      target: targetUrl.toString(), status: 'running', findings_count: 0,
+      started_at: new Date().toISOString(), user_id: user.id,
+      report: { findings: [], targetTree, openPorts, detectedTech, phase: 'queued' }
+    }, { onConflict: 'id' });
+
     // ── Live-stream every finding to recon_findings so it appears in the dashboard
     //    Live Findings Stream the moment it's discovered (not only at scan end).
     const streamFindingLive = async (f: any) => {
@@ -182,6 +190,7 @@ serve(async (req) => {
         const hashBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
         const hashHex = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
         await supabase.from('recon_findings').upsert({
+          scan_id: scanId,
           target_host: host,
           url_path: f.endpoint || null,
           finding_type: (f.category || f.id || 'vapt_finding').toString().toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 60),
