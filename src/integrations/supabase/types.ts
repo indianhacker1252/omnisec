@@ -113,6 +113,7 @@ export type Database = {
           target_host: string
           title: string
           url_path: string | null
+          user_id: string | null
           verification_status: string
           vulnerable_parameter: string | null
         }
@@ -133,6 +134,7 @@ export type Database = {
           target_host: string
           title: string
           url_path?: string | null
+          user_id?: string | null
           verification_status?: string
           vulnerable_parameter?: string | null
         }
@@ -153,6 +155,7 @@ export type Database = {
           target_host?: string
           title?: string
           url_path?: string | null
+          user_id?: string | null
           verification_status?: string
           vulnerable_parameter?: string | null
         }
@@ -171,6 +174,7 @@ export type Database = {
           started_at: string | null
           status: string
           subdomain: string
+          user_id: string | null
         }
         Insert: {
           completed_at?: string | null
@@ -184,6 +188,7 @@ export type Database = {
           started_at?: string | null
           status?: string
           subdomain: string
+          user_id?: string | null
         }
         Update: {
           completed_at?: string | null
@@ -197,6 +202,7 @@ export type Database = {
           started_at?: string | null
           status?: string
           subdomain?: string
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -208,6 +214,7 @@ export type Database = {
           custom_headers: Json | null
           id: string
           scan_id: string
+          user_id: string | null
           user_id_observed: string | null
           user_label: string
         }
@@ -218,6 +225,7 @@ export type Database = {
           custom_headers?: Json | null
           id?: string
           scan_id: string
+          user_id?: string | null
           user_id_observed?: string | null
           user_label?: string
         }
@@ -228,6 +236,7 @@ export type Database = {
           custom_headers?: Json | null
           id?: string
           scan_id?: string
+          user_id?: string | null
           user_id_observed?: string | null
           user_label?: string
         }
@@ -244,6 +253,7 @@ export type Database = {
           reflected_url: string | null
           scan_id: string
           status: string
+          user_id: string | null
         }
         Insert: {
           canary_token: string
@@ -255,6 +265,7 @@ export type Database = {
           reflected_url?: string | null
           scan_id: string
           status?: string
+          user_id?: string | null
         }
         Update: {
           canary_token?: string
@@ -266,6 +277,7 @@ export type Database = {
           reflected_url?: string | null
           scan_id?: string
           status?: string
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -282,6 +294,7 @@ export type Database = {
           started_at: string
           status: string
           target: string | null
+          user_id: string | null
         }
         Insert: {
           completed_at?: string | null
@@ -295,6 +308,7 @@ export type Database = {
           started_at?: string
           status: string
           target?: string | null
+          user_id?: string | null
         }
         Update: {
           completed_at?: string | null
@@ -308,6 +322,7 @@ export type Database = {
           started_at?: string
           status?: string
           target?: string | null
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -325,6 +340,7 @@ export type Database = {
           started_at: string | null
           status: string
           target: string
+          user_id: string | null
         }
         Insert: {
           completed_at?: string | null
@@ -339,6 +355,7 @@ export type Database = {
           started_at?: string | null
           status?: string
           target: string
+          user_id?: string | null
         }
         Update: {
           completed_at?: string | null
@@ -353,6 +370,7 @@ export type Database = {
           started_at?: string | null
           status?: string
           target?: string
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -369,6 +387,7 @@ export type Database = {
           progress: number
           scan_id: string
           total_phases: number
+          user_id: string | null
         }
         Insert: {
           created_at?: string
@@ -382,6 +401,7 @@ export type Database = {
           progress?: number
           scan_id: string
           total_phases?: number
+          user_id?: string | null
         }
         Update: {
           created_at?: string
@@ -395,6 +415,7 @@ export type Database = {
           progress?: number
           scan_id?: string
           total_phases?: number
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -411,6 +432,7 @@ export type Database = {
           target: string | null
           title: string
           type: string
+          user_id: string | null
         }
         Insert: {
           cleared_at?: string | null
@@ -424,6 +446,7 @@ export type Database = {
           target?: string | null
           title: string
           type: string
+          user_id?: string | null
         }
         Update: {
           cleared_at?: string | null
@@ -437,6 +460,7 @@ export type Database = {
           target?: string | null
           title?: string
           type?: string
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -481,6 +505,7 @@ export type Database = {
           severity_counts: Json | null
           summary: string | null
           title: string
+          user_id: string | null
         }
         Insert: {
           created_at?: string
@@ -492,6 +517,7 @@ export type Database = {
           severity_counts?: Json | null
           summary?: string | null
           title: string
+          user_id?: string | null
         }
         Update: {
           created_at?: string
@@ -503,6 +529,7 @@ export type Database = {
           severity_counts?: Json | null
           summary?: string | null
           title?: string
+          user_id?: string | null
         }
         Relationships: [
           {
