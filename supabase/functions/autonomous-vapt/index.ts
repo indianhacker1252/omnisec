@@ -250,19 +250,24 @@ serve(async (req) => {
         info: findings.filter(f => f.severity === 'info').length
       };
       try {
-        const { error: histErr } = await supabase.from('scan_history').insert({
+        const { error: histErr } = await supabase.from('scan_history').upsert({
+          id: scanId,
           module: 'autonomous_vapt', scan_type: 'Autonomous VAPT v11 - Legend-Grade',
           target: targetUrl.toString(), status, findings_count: findings.length,
+          completed_at: status === 'completed' ? new Date().toISOString() : null,
           duration_ms: Date.now() - scanStart,
-          report: { findings: trimmedFindings.slice(0, 50), targetTree, openPorts, detectedTech }
-        });
+          report: { findings: trimmedFindings.slice(0, 50), targetTree, openPorts, detectedTech },
+          user_id: user.id,
+        }, { onConflict: 'id' });
         if (histErr) console.error('scan_history insert error:', JSON.stringify(histErr));
         
         const { error: repErr } = await supabase.from('security_reports').insert({
+          scan_id: scanId,
           module: 'autonomous_vapt',
           title: `XBOW VAPT v11 - ${targetUrl.hostname}`,
           summary: `${findings.length} exploit-validated: ${severityCounts.critical}C ${severityCounts.high}H ${severityCounts.medium}M | ${discoveredSubdomains.length} subs, ${openPorts.length} ports`,
-          findings: trimmedFindings, severity_counts: severityCounts, recommendations: []
+          findings: trimmedFindings, severity_counts: severityCounts, recommendations: [],
+          user_id: user.id,
         });
         if (repErr) console.error('security_reports insert error:', JSON.stringify(repErr));
       } catch (e) { console.error('DB save error:', e); }
@@ -559,9 +564,9 @@ serve(async (req) => {
       // ═══ MULTI-PASS CHAIN: insert Pass 1 as completed → DB trigger fires Pass 2..6 in background ═══
       try {
         await supabase.from('scan_passes').insert({
-          scan_id: scanId, pass_number: 1, pass_name: 'recon_initial', status: 'pending',
+          scan_id: scanId, pass_number: 1, pass_name: 'recon_initial', status: 'pending', user_id: user.id,
           target: targetUrl.toString(), findings_count: findings.length,
-          payload: { endpoints: discoveredEndpoints.slice(0, 100), subdomains: discoveredSubdomains.slice(0, 50), tech: detectedTech, partialFindings: verifiedFindings.slice(0, 30) }
+          payload: { endpoints: discoveredEndpoints.slice(0, 100), discoveredEndpoints: discoveredEndpoints.slice(0, 100), subdomains: discoveredSubdomains.slice(0, 50), discoveredSubdomains: discoveredSubdomains.slice(0, 50), tech: detectedTech, detectedTech, openPorts, fingerprint, forms: discoveryResults.forms?.slice(0, 50) || [], params: discoveryResults.params?.slice(0, 200) || [], partialFindings: verifiedFindings.slice(0, 30), userId: user.id }
         });
         await supabase.from('scan_passes').update({ status: 'completed', completed_at: new Date().toISOString() })
           .eq('scan_id', scanId).eq('pass_number', 1);
