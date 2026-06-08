@@ -95,6 +95,42 @@ export type Database = {
         }
         Relationships: []
       }
+      planner_decisions: {
+        Row: {
+          created_at: string
+          decision: string
+          id: string
+          rationale: string | null
+          scan_id: string
+          step: number
+          tool_call: Json | null
+          tool_result: Json | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          decision: string
+          id?: string
+          rationale?: string | null
+          scan_id: string
+          step?: number
+          tool_call?: Json | null
+          tool_result?: Json | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          decision?: string
+          id?: string
+          rationale?: string | null
+          scan_id?: string
+          step?: number
+          tool_call?: Json | null
+          tool_result?: Json | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       recon_findings: {
         Row: {
           confidence_score: number | null
@@ -325,6 +361,69 @@ export type Database = {
           started_at?: string
           status?: string
           target?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      scan_jobs: {
+        Row: {
+          attempts: number
+          completed_at: string | null
+          created_at: string
+          detector: string
+          error: string | null
+          id: string
+          locked_at: string | null
+          locked_by: string | null
+          max_attempts: number
+          params: Json
+          priority: number
+          result: Json | null
+          scan_id: string
+          started_at: string | null
+          status: string
+          target: string
+          updated_at: string
+          user_id: string | null
+        }
+        Insert: {
+          attempts?: number
+          completed_at?: string | null
+          created_at?: string
+          detector: string
+          error?: string | null
+          id?: string
+          locked_at?: string | null
+          locked_by?: string | null
+          max_attempts?: number
+          params?: Json
+          priority?: number
+          result?: Json | null
+          scan_id: string
+          started_at?: string | null
+          status?: string
+          target: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          attempts?: number
+          completed_at?: string | null
+          created_at?: string
+          detector?: string
+          error?: string | null
+          id?: string
+          locked_at?: string | null
+          locked_by?: string | null
+          max_attempts?: number
+          params?: Json
+          priority?: number
+          result?: Json | null
+          scan_id?: string
+          started_at?: string | null
+          status?: string
+          target?: string
+          updated_at?: string
           user_id?: string | null
         }
         Relationships: []
@@ -791,6 +890,35 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      claim_next_scan_job: {
+        Args: { p_batch?: number; p_worker: string }
+        Returns: {
+          attempts: number
+          completed_at: string | null
+          created_at: string
+          detector: string
+          error: string | null
+          id: string
+          locked_at: string | null
+          locked_by: string | null
+          max_attempts: number
+          params: Json
+          priority: number
+          result: Json | null
+          scan_id: string
+          started_at: string | null
+          status: string
+          target: string
+          updated_at: string
+          user_id: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "scan_jobs"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       find_similar_vapt_actions: {
         Args: {
           p_domain?: string
@@ -820,6 +948,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      requeue_stale_scan_jobs: { Args: never; Returns: number }
     }
     Enums: {
       app_role: "admin" | "analyst" | "viewer"
