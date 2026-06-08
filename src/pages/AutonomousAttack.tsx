@@ -26,6 +26,7 @@ import { AILearningEngine } from "@/components/AILearningEngine";
 import { AdvancedPayloadEngine } from "@/components/AdvancedPayloadEngine";
 import { ThreatIntelligence } from "@/components/ThreatIntelligence";
 import { AutomatedWorkflow } from "@/components/AutomatedWorkflow";
+import { PlannerThoughts } from "@/components/PlannerThoughts";
 
 export default function AutonomousAttack() {
   const [target, setTarget] = useState("");
@@ -34,6 +35,7 @@ export default function AutonomousAttack() {
   const [attackChain, setAttackChain] = useState<any>(null);
   const [currentPhase, setCurrentPhase] = useState("");
   const [attackProgress, setAttackProgress] = useState(0);
+  const [plannerScanId, setPlannerScanId] = useState<string | null>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
 
