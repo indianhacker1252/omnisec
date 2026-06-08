@@ -398,6 +398,9 @@ export default function AutonomousAttack() {
               </Card>
             )}
 
+            {/* Live AI Planner */}
+            <PlannerThoughts scanId={plannerScanId} />
+
             {/* Learning & Explainable AI */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <AILearningEngine />
