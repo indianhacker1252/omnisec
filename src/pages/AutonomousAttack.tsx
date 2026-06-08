@@ -258,10 +258,10 @@ export default function AutonomousAttack() {
                           toast({ title: "Sign in required", variant: "destructive" });
                           return;
                         }
-                        await supabase.from("scan_history").insert({
+                        await supabase.from("scan_history").insert([{
                           id: scanId, target, scan_type: "autonomous_planner",
-                          status: "running", user_id: user.id,
-                        });
+                          module: "autonomous_planner", status: "running", user_id: user.id,
+                        }]);
                         setPlannerScanId(scanId);
                         toast({ title: "AI Planner launched", description: "Watch the Planner Thoughts panel below." });
                         supabase.functions.invoke("vapt-planner", {
