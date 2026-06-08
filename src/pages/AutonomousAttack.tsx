@@ -26,6 +26,7 @@ import { AILearningEngine } from "@/components/AILearningEngine";
 import { AdvancedPayloadEngine } from "@/components/AdvancedPayloadEngine";
 import { ThreatIntelligence } from "@/components/ThreatIntelligence";
 import { AutomatedWorkflow } from "@/components/AutomatedWorkflow";
+import { PlannerThoughts } from "@/components/PlannerThoughts";
 
 export default function AutonomousAttack() {
   const [target, setTarget] = useState("");
@@ -34,6 +35,7 @@ export default function AutonomousAttack() {
   const [attackChain, setAttackChain] = useState<any>(null);
   const [currentPhase, setCurrentPhase] = useState("");
   const [attackProgress, setAttackProgress] = useState(0);
+  const [plannerScanId, setPlannerScanId] = useState<string | null>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -243,6 +245,32 @@ export default function AutonomousAttack() {
                         <><Target className="w-5 h-5" />Launch Autonomous Attack</>
                       )}
                     </Button>
+
+                    <Button
+                      variant="outline"
+                      className="w-full gap-2 border-primary/40"
+                      size="lg"
+                      disabled={!target}
+                      onClick={async () => {
+                        const scanId = crypto.randomUUID();
+                        const { data: { user } } = await supabase.auth.getUser();
+                        if (!user) {
+                          toast({ title: "Sign in required", variant: "destructive" });
+                          return;
+                        }
+                        await supabase.from("scan_history").insert([{
+                          id: scanId, target, scan_type: "autonomous_planner",
+                          module: "autonomous_planner", status: "running", user_id: user.id,
+                        }]);
+                        setPlannerScanId(scanId);
+                        toast({ title: "AI Planner launched", description: "Watch the Planner Thoughts panel below." });
+                        supabase.functions.invoke("vapt-planner", {
+                          body: { scanId, target, userId: user.id },
+                        }).catch(e => console.error("planner invoke", e));
+                      }}
+                    >
+                      <Brain className="w-5 h-5" /> Launch AI Planner (Agentic)
+                    </Button>
                   </TabsContent>
 
                   <TabsContent value="zap" className="space-y-4">
@@ -369,6 +397,9 @@ export default function AutonomousAttack() {
                 )}
               </Card>
             )}
+
+            {/* Live AI Planner */}
+            <PlannerThoughts scanId={plannerScanId} />
 
             {/* Learning & Explainable AI */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
