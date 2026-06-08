@@ -245,6 +245,32 @@ export default function AutonomousAttack() {
                         <><Target className="w-5 h-5" />Launch Autonomous Attack</>
                       )}
                     </Button>
+
+                    <Button
+                      variant="outline"
+                      className="w-full gap-2 border-primary/40"
+                      size="lg"
+                      disabled={!target}
+                      onClick={async () => {
+                        const scanId = crypto.randomUUID();
+                        const { data: { user } } = await supabase.auth.getUser();
+                        if (!user) {
+                          toast({ title: "Sign in required", variant: "destructive" });
+                          return;
+                        }
+                        await supabase.from("scan_history").insert({
+                          id: scanId, target, scan_type: "autonomous_planner",
+                          status: "running", user_id: user.id,
+                        });
+                        setPlannerScanId(scanId);
+                        toast({ title: "AI Planner launched", description: "Watch the Planner Thoughts panel below." });
+                        supabase.functions.invoke("vapt-planner", {
+                          body: { scanId, target, userId: user.id },
+                        }).catch(e => console.error("planner invoke", e));
+                      }}
+                    >
+                      <Brain className="w-5 h-5" /> Launch AI Planner (Agentic)
+                    </Button>
                   </TabsContent>
 
                   <TabsContent value="zap" className="space-y-4">
