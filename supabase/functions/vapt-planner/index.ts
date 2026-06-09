@@ -236,6 +236,14 @@ serve(async (req) => {
             const { data } = await supa.from("scan_jobs").select("detector,status,error")
               .eq("scan_id", scanId).limit(50);
             result = { jobs: data ?? [] };
+          } else if (name === "query_context") {
+            const { data } = await supa.from("target_context")
+              .select("target_host,tech_stack,web_server,frameworks,waf,auth_model,endpoints,notes")
+              .eq("scan_id", scanId).order("updated_at", { ascending: false }).limit(1).maybeSingle();
+            result = { context: data ?? null };
+          } else if (name === "query_kg") {
+            const { data } = await supa.rpc("kg_top_exploits", { p_tech: args.tech, p_limit: 10 });
+            result = { top_exploits: data ?? [] };
           } else if (name === "note") {
             result = { noted: true };
           } else if (name === "finalize") {
