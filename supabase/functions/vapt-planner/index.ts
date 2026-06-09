@@ -200,7 +200,7 @@ serve(async (req) => {
     ];
 
     let finalized = false;
-    const MAX_STEPS = 20;
+    const MAX_STEPS = 30;
 
     while (step < MAX_STEPS && !finalized) {
       step++;
