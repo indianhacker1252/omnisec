@@ -95,6 +95,45 @@ export type Database = {
         }
         Relationships: []
       }
+      kg_exploit_outcomes: {
+        Row: {
+          created_at: string
+          detector: string
+          id: string
+          payload_class: string | null
+          severity: string | null
+          signal: Json
+          success: boolean
+          target_host: string
+          tech_tag: string | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          detector: string
+          id?: string
+          payload_class?: string | null
+          severity?: string | null
+          signal?: Json
+          success?: boolean
+          target_host: string
+          tech_tag?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          detector?: string
+          id?: string
+          payload_class?: string | null
+          severity?: string | null
+          signal?: Json
+          success?: boolean
+          target_host?: string
+          tech_tag?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       planner_decisions: {
         Row: {
           created_at: string
@@ -643,6 +682,54 @@ export type Database = {
           },
         ]
       }
+      target_context: {
+        Row: {
+          auth_model: string | null
+          created_at: string
+          endpoints: Json
+          frameworks: Json
+          id: string
+          notes: string | null
+          scan_id: string
+          target_host: string
+          tech_stack: Json
+          updated_at: string
+          user_id: string | null
+          waf: string | null
+          web_server: string | null
+        }
+        Insert: {
+          auth_model?: string | null
+          created_at?: string
+          endpoints?: Json
+          frameworks?: Json
+          id?: string
+          notes?: string | null
+          scan_id: string
+          target_host: string
+          tech_stack?: Json
+          updated_at?: string
+          user_id?: string | null
+          waf?: string | null
+          web_server?: string | null
+        }
+        Update: {
+          auth_model?: string | null
+          created_at?: string
+          endpoints?: Json
+          frameworks?: Json
+          id?: string
+          notes?: string | null
+          scan_id?: string
+          target_host?: string
+          tech_stack?: Json
+          updated_at?: string
+          user_id?: string | null
+          waf?: string | null
+          web_server?: string | null
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           created_at: string | null
@@ -947,6 +1034,15 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      kg_top_exploits: {
+        Args: { p_limit?: number; p_tech: string }
+        Returns: {
+          detector: string
+          payload_class: string
+          success_count: number
+          total_count: number
+        }[]
       }
       requeue_stale_scan_jobs: { Args: never; Returns: number }
     }
