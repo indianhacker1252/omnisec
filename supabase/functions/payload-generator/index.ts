@@ -10,23 +10,22 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    // Initialize Supabase client
+    const isWorker = req.headers.get("x-internal-worker") === "1";
     const supabaseClient = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
+      isWorker ? (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "") : (Deno.env.get("SUPABASE_ANON_KEY") ?? ""),
+      isWorker ? {} : { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
     );
 
-    // Authenticate user
-    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
-      });
+    if (!isWorker) {
+      const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+      if (authError || !user) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
     }
-
-    // All authenticated users can generate payloads (auth enforced above)
 
     const { type, target, port, options } = await req.json();
     
