@@ -292,6 +292,8 @@ export default function AutonomousAttack() {
                           module: "autonomous_planner", status: "running", user_id: user.id,
                         }]);
                         setPlannerScanId(scanId);
+                        setIsRunning(true);
+                        setCurrentPhase("AI Planner running...");
                         toast({ title: "AI Planner launched", description: "Watch the Planner Thoughts panel below." });
                         supabase.functions.invoke("vapt-planner", {
                           body: { scanId, target, userId: user.id },
@@ -300,6 +302,19 @@ export default function AutonomousAttack() {
                     >
                       <Brain className="w-5 h-5" /> Launch AI Planner (Agentic)
                     </Button>
+
+                    {(isRunning || plannerScanId) && (
+                      <Button
+                        onClick={stopAttack}
+                        disabled={stopRequested}
+                        variant="destructive"
+                        className="w-full gap-2"
+                        size="lg"
+                      >
+                        <AlertTriangle className="w-5 h-5" />
+                        {stopRequested ? "Stopping..." : "Stop Scan"}
+                      </Button>
+                    )}
                   </TabsContent>
 
                   <TabsContent value="zap" className="space-y-4">
