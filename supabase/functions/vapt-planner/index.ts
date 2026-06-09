@@ -102,6 +102,26 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "query_context",
+      description: "Read target_context (tech stack, WAF, frameworks) collected for this scan.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "query_kg",
+      description: "Query the cross-scan knowledge graph for proven detector+payload classes on a tech stack tag.",
+      parameters: {
+        type: "object",
+        properties: { tech: { type: "string", description: "e.g. php, aspnet, wordpress, graphql" } },
+        required: ["tech"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "note",
       description: "Record a short reasoning note (shown in PlannerThoughts UI).",
       parameters: {
