@@ -36,8 +36,37 @@ export default function AutonomousAttack() {
   const [currentPhase, setCurrentPhase] = useState("");
   const [attackProgress, setAttackProgress] = useState(0);
   const [plannerScanId, setPlannerScanId] = useState<string | null>(null);
+  const [stopRequested, setStopRequested] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  const stopAttack = async () => {
+    setStopRequested(true);
+    setCurrentPhase("Stopping scan...");
+    try {
+      if (plannerScanId) {
+        // Cancel pending jobs and mark scan as cancelled
+        await supabase
+          .from("scan_jobs")
+          .update({ status: "cancelled" })
+          .eq("scan_id", plannerScanId)
+          .in("status", ["pending", "running"]);
+        await supabase
+          .from("scan_history")
+          .update({ status: "cancelled" })
+          .eq("id", plannerScanId);
+      }
+      toast({ title: "Scan stopped", description: "Cancellation requested. In-flight tasks will halt shortly." });
+    } catch (e: any) {
+      console.error("stop error", e);
+      toast({ title: "Stop failed", description: e.message, variant: "destructive" });
+    } finally {
+      setIsRunning(false);
+      setCurrentPhase("");
+      setAttackProgress(0);
+      setStopRequested(false);
+    }
+  };
 
   const startAutonomousAttack = async () => {
     if (!target || !objective) {
@@ -263,6 +292,8 @@ export default function AutonomousAttack() {
                           module: "autonomous_planner", status: "running", user_id: user.id,
                         }]);
                         setPlannerScanId(scanId);
+                        setIsRunning(true);
+                        setCurrentPhase("AI Planner running...");
                         toast({ title: "AI Planner launched", description: "Watch the Planner Thoughts panel below." });
                         supabase.functions.invoke("vapt-planner", {
                           body: { scanId, target, userId: user.id },
@@ -271,6 +302,19 @@ export default function AutonomousAttack() {
                     >
                       <Brain className="w-5 h-5" /> Launch AI Planner (Agentic)
                     </Button>
+
+                    {(isRunning || plannerScanId) && (
+                      <Button
+                        onClick={stopAttack}
+                        disabled={stopRequested}
+                        variant="destructive"
+                        className="w-full gap-2"
+                        size="lg"
+                      >
+                        <AlertTriangle className="w-5 h-5" />
+                        {stopRequested ? "Stopping..." : "Stop Scan"}
+                      </Button>
+                    )}
                   </TabsContent>
 
                   <TabsContent value="zap" className="space-y-4">
