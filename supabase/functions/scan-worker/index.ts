@@ -39,7 +39,8 @@ async function dispatch(detector: string, body: any, signal: AbortSignal) {
     headers: {
       "Content-Type": "application/json",
       "apikey": ANON,
-      "Authorization": `Bearer ${ANON}`,
+      "Authorization": `Bearer ${SRV_KEY}`,
+      "x-internal-worker": "1",
     },
     body: JSON.stringify(body),
   });
