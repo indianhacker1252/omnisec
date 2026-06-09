@@ -91,12 +91,16 @@ serve(async (req) => {
     const body = await req.json();
     let userId: string | null = body?.userId ?? null;
 
+    // Always have a working supabaseClient for downstream DB writes (uses service role when worker).
+    const supabaseClient = isWorker
+      ? createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "")
+      : createClient(
+          Deno.env.get("SUPABASE_URL") ?? "",
+          Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+          { global: { headers: { Authorization: req.headers.get("Authorization")! } } },
+        );
+
     if (!isWorker) {
-      const supabaseClient = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-        { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
-      );
       const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
       if (authError || !user) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), {
