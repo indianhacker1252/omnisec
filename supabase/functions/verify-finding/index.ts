@@ -10,21 +10,29 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
+    const isWorker = req.headers.get("x-internal-worker") === "1";
     const authClient = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
+      isWorker ? (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "") : (Deno.env.get("SUPABASE_ANON_KEY") ?? ""),
+      isWorker ? {} : { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
     );
-    const { data: { user }, error: authError } = await authClient.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" }
-      });
-    }
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     const body = await req.json();
-    const { action, finding, script, verificationResult } = body;
+    const { action, finding, script, verificationResult, userId: bodyUserId } = body;
+
+    let user: any = null;
+    if (isWorker) {
+      user = { id: bodyUserId ?? null };
+    } else {
+      const { data: { user: authedUser }, error: authError } = await authClient.auth.getUser();
+      if (authError || !authedUser) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+      user = authedUser;
+    }
 
     if (action === "generate_script") {
       const generatedScript = await generateVerificationScript(finding, LOVABLE_API_KEY);

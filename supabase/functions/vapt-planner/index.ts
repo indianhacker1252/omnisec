@@ -25,13 +25,16 @@ const SUPA_URL = Deno.env.get("SUPABASE_URL")!;
 const SRV_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const LOVABLE  = Deno.env.get("LOVABLE_API_KEY")!;
 
-const SYSTEM_PROMPT = `You are OmniSec's autonomous VAPT planner. Goal: discover the
-maximum number of high-severity vulnerabilities on the target while staying lawful
-(scope already validated). You reason step-by-step about what to test next.
+const SYSTEM_PROMPT = `You are OmniSec's autonomous VAPT planner — designed to outperform XBOW.
+Goal: discover the maximum number of HIGH/CRITICAL vulnerabilities on the target while
+staying lawful (scope already validated). You reason step-by-step.
 
-Workflow:
-1. Always start with queue_recon to map subdomains, tech stack, endpoints.
-2. After recon, queue detectors in priority order. Cover OWASP A01-A10:
+Mandatory workflow:
+1. queue_recon first to map subdomains, tech stack, endpoints, WAF.
+2. Call query_context to load the latest target_context for this scan (tech, waf, frameworks).
+3. Call query_kg with a detected tech (e.g. "php","aspnet","wordpress","graphql") to see which
+   detector+payload classes have historically succeeded on similar stacks — bias toward those.
+4. Queue detectors covering OWASP A01-A10 in priority order:
    - A01 BOLA/IDOR/auth → vapt-bopla, vapt-advanced
    - A02 Crypto/JWT     → vapt-chains (jwtAttacks)
    - A03 Injection      → autonomous-vapt, vapt-chains
@@ -42,12 +45,14 @@ Workflow:
    - A08 Integrity      → vapt-chains (cicdWebhook, samlXsw)
    - A09 Logging        → autonomous-vapt
    - A10 SSRF           → vapt-chains (redirectSsrfChain, pdfEngineSsrf)
-3. After each batch, call query_findings + query_jobs to see results.
-4. If a tech (e.g. GraphQL, OAuth, SAML, PHP) is detected → queue its specialized scanner.
-5. If high-severity findings appear → queue verify-finding for dual confirmation.
-6. When you've covered all categories OR queued >=15 detectors → call finalize.
+5. After each batch, call query_findings + query_jobs. For every HIGH or CRITICAL finding,
+   call queue_detector with name="verify-finding" and params={action:"generate_script", finding:<finding>}
+   to trigger dual-confirmation.
+6. If specific tech is detected, queue its specialized scanner (GraphQL → vapt-graphql,
+   OAuth → vapt-oauth, SAML → vapt-chains samlXsw, WordPress/PHP → vapt-intel).
+7. When you've covered all A01-A10 OR queued >=18 detectors → call finalize.
 
-Be decisive. Don't repeat queued detectors. Use note() to record your reasoning.`;
+Be decisive. Don't repeat queued detectors. Use note() to record reasoning.`;
 
 const TOOLS = [
   {
@@ -92,6 +97,26 @@ const TOOLS = [
       name: "query_jobs",
       description: "Read scan_jobs statuses for this scan.",
       parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "query_context",
+      description: "Read target_context (tech stack, WAF, frameworks) collected for this scan.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "query_kg",
+      description: "Query the cross-scan knowledge graph for proven detector+payload classes on a tech stack tag.",
+      parameters: {
+        type: "object",
+        properties: { tech: { type: "string", description: "e.g. php, aspnet, wordpress, graphql" } },
+        required: ["tech"],
+      },
     },
   },
   {
@@ -175,7 +200,7 @@ serve(async (req) => {
     ];
 
     let finalized = false;
-    const MAX_STEPS = 20;
+    const MAX_STEPS = 30;
 
     while (step < MAX_STEPS && !finalized) {
       step++;
@@ -211,6 +236,14 @@ serve(async (req) => {
             const { data } = await supa.from("scan_jobs").select("detector,status,error")
               .eq("scan_id", scanId).limit(50);
             result = { jobs: data ?? [] };
+          } else if (name === "query_context") {
+            const { data } = await supa.from("target_context")
+              .select("target_host,tech_stack,web_server,frameworks,waf,auth_model,endpoints,notes")
+              .eq("scan_id", scanId).order("updated_at", { ascending: false }).limit(1).maybeSingle();
+            result = { context: data ?? null };
+          } else if (name === "query_kg") {
+            const { data } = await supa.rpc("kg_top_exploits", { p_tech: args.tech, p_limit: 10 });
+            result = { top_exploits: data ?? [] };
           } else if (name === "note") {
             result = { noted: true };
           } else if (name === "finalize") {

@@ -87,20 +87,30 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const supabaseClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
-    );
+    const isWorker = req.headers.get("x-internal-worker") === "1";
+    const body = await req.json();
+    let userId: string | null = body?.userId ?? null;
 
-    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    // Always have a working supabaseClient for downstream DB writes (uses service role when worker).
+    const supabaseClient = isWorker
+      ? createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "")
+      : createClient(
+          Deno.env.get("SUPABASE_URL") ?? "",
+          Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+          { global: { headers: { Authorization: req.headers.get("Authorization")! } } },
+        );
+
+    if (!isWorker) {
+      const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+      if (authError || !user) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      userId = user.id;
     }
 
-    const { action, domain, finding } = await req.json();
+    const { action, domain, finding } = body;
 
     // ---- ACTION: enumerate ----
     if (action === "enumerate") {
@@ -190,12 +200,55 @@ serve(async (req) => {
         }, { onConflict: "subdomain" });
       }
 
+      // Phase 3: lightweight tech fingerprint via HTTP headers on root
+      let tech: string[] = [];
+      let webServer: string | null = null;
+      let waf: string | null = null;
+      const frameworks: string[] = [];
+      try {
+        const probeUrl = `http://${cleanDomain}/`;
+        const probe = await fetch(probeUrl, { method: "GET", redirect: "follow", signal: AbortSignal.timeout(8000) });
+        webServer = probe.headers.get("server");
+        const xpb = probe.headers.get("x-powered-by");
+        if (xpb) tech.push(xpb);
+        if (webServer) tech.push(webServer);
+        const html = (await probe.text()).slice(0, 4000).toLowerCase();
+        if (html.includes("wp-content") || html.includes("wordpress")) { tech.push("wordpress"); frameworks.push("wordpress"); }
+        if (html.includes("drupal")) { tech.push("drupal"); frameworks.push("drupal"); }
+        if (html.includes("__viewstate") || (webServer ?? "").toLowerCase().includes("iis")) { tech.push("aspnet"); frameworks.push("aspnet"); }
+        if (html.includes("react")) frameworks.push("react");
+        if (html.includes("graphql")) frameworks.push("graphql");
+        const cf = probe.headers.get("cf-ray") || probe.headers.get("server")?.toLowerCase().includes("cloudflare");
+        if (cf) waf = "cloudflare";
+        const aws = probe.headers.get("x-amz-cf-id");
+        if (aws) waf = waf ?? "aws-cloudfront";
+      } catch { /* probe failures are non-fatal */ }
+
+      {
+        // Persist context — scanId comes from body when planner-invoked
+        const scanIdForCtx = (body as any)?.scanId ?? (body as any)?.scan_id ?? null;
+        if (scanIdForCtx) {
+          await supabaseClient.from("target_context").insert({
+            scan_id: scanIdForCtx,
+            user_id: userId,
+            target_host: cleanDomain,
+            tech_stack: tech,
+            web_server: webServer,
+            frameworks,
+            waf,
+            endpoints: unique.slice(0, 25),
+            notes: `auto-detected during recon enumerate; ${unique.length} live subdomains`,
+          });
+        }
+      }
+
       return new Response(JSON.stringify({
         success: true,
         domain: cleanDomain,
         subdomains: unique,
         total: unique.length,
         queuedForScanning: unique.length,
+        tech_stack: tech, web_server: webServer, waf, frameworks,
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
