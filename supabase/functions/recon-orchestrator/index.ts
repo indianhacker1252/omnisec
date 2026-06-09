@@ -224,7 +224,7 @@ serve(async (req) => {
         if (aws) waf = waf ?? "aws-cloudfront";
       } catch { /* probe failures are non-fatal */ }
 
-      if (req.body !== null) {
+      {
         // Persist context — scanId comes from body when planner-invoked
         const scanIdForCtx = (body as any)?.scanId ?? (body as any)?.scan_id ?? null;
         if (scanIdForCtx) {
