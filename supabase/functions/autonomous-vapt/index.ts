@@ -136,17 +136,31 @@ serve(async (req) => {
       );
     }
 
-    // ═══ INTERACTIVE CALL — require authenticated user ═══
-    const authClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } } }
-    );
-    const { data: { user }, error: authError } = await authClient.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" }
-      });
+    // ═══ INTERNAL WORKER CALL ═══
+    const isWorker = req.headers.get("x-internal-worker") === "1";
+    let user: any = null;
+    if (isWorker) {
+      let uid = chainUserId || null;
+      if (!uid && chainScanId) {
+        const { data: scanOwner } = await supabase
+          .from('scan_history').select('user_id').eq('id', chainScanId).maybeSingle();
+        uid = scanOwner?.user_id ?? null;
+      }
+      user = { id: uid };
+    } else {
+      // ═══ INTERACTIVE CALL — require authenticated user ═══
+      const authClient = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+        { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } } }
+      );
+      const { data: { user: authedUser }, error: authError } = await authClient.auth.getUser();
+      if (authError || !authedUser) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+      user = authedUser;
     }
 
 
